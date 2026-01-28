@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Universal Browser MCP",
+  "version": "1.0.0",
+  "description": "Controle universal do browser via MCP para Claude AI - Funciona em qualquer site",
+
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs",
+    "webNavigation",
+    "windows",
+    "alarms",
+    "debugger"
+  ],
+
+  "host_permissions": [
+    "<all_urls>"
+  ],
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Universal Browser MCP"
+  }
+}
