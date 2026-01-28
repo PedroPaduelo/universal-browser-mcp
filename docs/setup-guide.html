@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Universal Browser MCP - Guia de Configuracao</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      min-height: 100vh;
+      color: #e4e4e4;
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 60px;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 10px;
+    }
+
+    .subtitle {
+      color: #888;
+      font-size: 1.1rem;
+    }
+
+    .server-info {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 30px;
+      margin-bottom: 40px;
+    }
+
+    .server-info h2 {
+      color: #00d4ff;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .server-info h2::before {
+      content: "1";
+      background: #00d4ff;
+      color: #1a1a2e;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.9rem;
+      font-weight: bold;
+    }
+
+    .command-box {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 15px 0;
+      position: relative;
+    }
+
+    .command-box code {
+      color: #7ee787;
+      font-family: 'Fira Code', 'Consolas', monospace;
+      font-size: 0.95rem;
+    }
+
+    .command-box .comment {
+      color: #8b949e;
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: #8b949e;
+      padding: 5px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: all 0.2s;
+    }
+
+    .copy-btn:hover {
+      background: #30363d;
+      color: #e4e4e4;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 25px;
+      margin-top: 40px;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 30px;
+      transition: all 0.3s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-5px);
+      border-color: rgba(255, 255, 255, 0.15);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+
+    .card-icon {
+      width: 50px;
+      height: 50px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+    }
+
+    .card-icon.claude { background: linear-gradient(135deg, #d97706, #f59e0b); }
+    .card-icon.vscode { background: linear-gradient(135deg, #0078d4, #00a2ed); }
+    .card-icon.cursor { background: linear-gradient(135deg, #7c3aed, #a78bfa); }
+    .card-icon.windsurf { background: linear-gradient(135deg, #10b981, #34d399); }
+
+    .card h3 {
+      font-size: 1.3rem;
+      color: #fff;
+    }
+
+    .card-subtitle {
+      color: #666;
+      font-size: 0.85rem;
+    }
+
+    .steps {
+      margin-top: 20px;
+    }
+
+    .step {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 15px;
+    }
+
+    .step-number {
+      background: rgba(255, 255, 255, 0.1);
+      color: #888;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      flex-shrink: 0;
+    }
+
+    .step-content {
+      flex: 1;
+    }
+
+    .step-content strong {
+      color: #00d4ff;
+    }
+
+    .config-file {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 15px;
+      margin-top: 10px;
+      font-family: 'Fira Code', 'Consolas', monospace;
+      font-size: 0.8rem;
+      overflow-x: auto;
+      position: relative;
+    }
+
+    .config-file .key { color: #79c0ff; }
+    .config-file .string { color: #a5d6ff; }
+    .config-file .bracket { color: #8b949e; }
+
+    .file-path {
+      background: rgba(0, 212, 255, 0.1);
+      color: #00d4ff;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-family: 'Fira Code', 'Consolas', monospace;
+      font-size: 0.8rem;
+      display: inline-block;
+      margin: 5px 0;
+    }
+
+    .note {
+      background: rgba(251, 191, 36, 0.1);
+      border-left: 3px solid #fbbf24;
+      padding: 15px;
+      margin-top: 15px;
+      border-radius: 0 8px 8px 0;
+      font-size: 0.9rem;
+    }
+
+    .note-title {
+      color: #fbbf24;
+      font-weight: 600;
+      margin-bottom: 5px;
+    }
+
+    .endpoints {
+      margin-top: 30px;
+    }
+
+    .endpoint-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+    }
+
+    .endpoint-table th,
+    .endpoint-table td {
+      padding: 12px 15px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .endpoint-table th {
+      background: rgba(255, 255, 255, 0.05);
+      color: #00d4ff;
+      font-weight: 600;
+    }
+
+    .endpoint-table td code {
+      background: rgba(0, 212, 255, 0.1);
+      color: #00d4ff;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: 'Fira Code', 'Consolas', monospace;
+    }
+
+    .method {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .method.get { background: #238636; color: #fff; }
+    .method.post { background: #1f6feb; color: #fff; }
+
+    footer {
+      text-align: center;
+      margin-top: 60px;
+      padding-top: 30px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      color: #666;
+    }
+
+    footer a {
+      color: #00d4ff;
+      text-decoration: none;
+    }
+
+    @media (max-width: 768px) {
+      h1 { font-size: 1.8rem; }
+      .cards { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Universal Browser MCP</h1>
+      <p class="subtitle">Guia de Configuracao para IDEs e Clientes MCP</p>
+    </header>
+
+    <section class="server-info">
+      <h2>Iniciar o Servidor</h2>
+      <p>Primeiro, inicie o servidor MCP. Ele ficara rodando e esperando conexoes:</p>
+
+      <div class="command-box">
+        <button class="copy-btn" onclick="copyCode(this)">Copiar</button>
+        <code>
+          <span class="comment"># Entre na pasta do servidor</span><br>
+          cd mcp-server<br><br>
+          <span class="comment"># Inicie o servidor</span><br>
+          npm start
+        </code>
+      </div>
+
+      <p style="margin-top: 15px;">O servidor vai iniciar em:</p>
+      <ul style="margin: 10px 0 0 20px;">
+        <li><strong>HTTP/SSE:</strong> <code style="color: #7ee787;">http://localhost:8080</code> (para clientes MCP)</li>
+        <li><strong>WebSocket:</strong> <code style="color: #7ee787;">ws://localhost:3002</code> (para a extensao do browser)</li>
+      </ul>
+
+      <div class="endpoints">
+        <h3 style="color: #fff; margin-bottom: 10px;">Endpoints Disponiveis</h3>
+        <table class="endpoint-table">
+          <thead>
+            <tr>
+              <th>Endpoint</th>
+              <th>Metodo</th>
+              <th>Descricao</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/sse</code></td>
+              <td><span class="method get">GET</span></td>
+              <td>Conexao SSE para clientes MCP</td>
+            </tr>
+            <tr>
+              <td><code>/messages</code></td>
+              <td><span class="method post">POST</span></td>
+              <td>Envio de mensagens</td>
+            </tr>
+            <tr>
+              <td><code>/health</code></td>
+              <td><span class="method get">GET</span></td>
+              <td>Health check do servidor</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <h2 style="color: #fff; margin-bottom: 10px; display: flex; align-items: center; gap: 10px;">
+      <span style="background: #00d4ff; color: #1a1a2e; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; font-weight: bold;">2</span>
+      Configurar seu Cliente MCP
+    </h2>
+
+    <div class="cards">
+      <!-- Claude Code CLI -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon claude">C</div>
+          <div>
+            <h3>Claude Code (CLI)</h3>
+            <span class="card-subtitle">Terminal / Command Line</span>
+          </div>
+        </div>
+
+        <div class="steps">
+          <div class="step">
+            <div class="step-number">1</div>
+            <div class="step-content">
+              Abra o arquivo de configuracao:
+              <div class="file-path">~/.claude/claude_desktop_config.json</div>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">2</div>
+            <div class="step-content">
+              Adicione a configuracao:
+              <div class="config-file">
+                <button class="copy-btn" onclick="copyConfig(this)">Copiar</button>
+<pre><span class="bracket">{</span>
+  <span class="key">"mcpServers"</span>: <span class="bracket">{</span>
+    <span class="key">"universal-browser"</span>: <span class="bracket">{</span>
+      <span class="key">"url"</span>: <span class="string">"http://localhost:8080/sse"</span>
+    <span class="bracket">}</span>
+  <span class="bracket">}</span>
+<span class="bracket">}</span></pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">3</div>
+            <div class="step-content">
+              Reinicie o Claude Code
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VS Code -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon vscode">VS</div>
+          <div>
+            <h3>VS Code</h3>
+            <span class="card-subtitle">Claude Extension / Copilot</span>
+          </div>
+        </div>
+
+        <div class="steps">
+          <div class="step">
+            <div class="step-number">1</div>
+            <div class="step-content">
+              Abra <strong>Settings</strong> (Ctrl+,)
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">2</div>
+            <div class="step-content">
+              Busque por <strong>"MCP"</strong> ou <strong>"Claude MCP"</strong>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">3</div>
+            <div class="step-content">
+              Em <strong>settings.json</strong>, adicione:
+              <div class="config-file">
+                <button class="copy-btn" onclick="copyConfig(this)">Copiar</button>
+<pre><span class="key">"claude.mcpServers"</span>: <span class="bracket">{</span>
+  <span class="key">"universal-browser"</span>: <span class="bracket">{</span>
+    <span class="key">"url"</span>: <span class="string">"http://localhost:8080/sse"</span>
+  <span class="bracket">}</span>
+<span class="bracket">}</span></pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="note">
+            <div class="note-title">Alternativa</div>
+            Ou edite diretamente:<br>
+            <span class="file-path">~/.vscode/settings.json</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cursor -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon cursor">Cu</div>
+          <div>
+            <h3>Cursor</h3>
+            <span class="card-subtitle">AI Code Editor</span>
+          </div>
+        </div>
+
+        <div class="steps">
+          <div class="step">
+            <div class="step-number">1</div>
+            <div class="step-content">
+              Abra <strong>Cursor Settings</strong> (Ctrl+Shift+J)
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">2</div>
+            <div class="step-content">
+              Va em <strong>Features</strong> &rarr; <strong>MCP Servers</strong>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">3</div>
+            <div class="step-content">
+              Clique em <strong>"Add New MCP Server"</strong>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">4</div>
+            <div class="step-content">
+              Configure:
+              <div class="config-file">
+                <button class="copy-btn" onclick="copyConfig(this)">Copiar</button>
+<pre><span class="key">"universal-browser"</span>: <span class="bracket">{</span>
+  <span class="key">"url"</span>: <span class="string">"http://localhost:8080/sse"</span>
+<span class="bracket">}</span></pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="note">
+            <div class="note-title">Arquivo de config</div>
+            <span class="file-path">~/.cursor/mcp.json</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Windsurf -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon windsurf">W</div>
+          <div>
+            <h3>Windsurf</h3>
+            <span class="card-subtitle">Codeium IDE</span>
+          </div>
+        </div>
+
+        <div class="steps">
+          <div class="step">
+            <div class="step-number">1</div>
+            <div class="step-content">
+              Abra <strong>Windsurf Settings</strong>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">2</div>
+            <div class="step-content">
+              Va em <strong>Cascade</strong> &rarr; <strong>MCP Servers</strong>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">3</div>
+            <div class="step-content">
+              Clique em <strong>"Add Server"</strong> ou edite:
+              <div class="file-path">~/.codeium/windsurf/mcp_config.json</div>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">4</div>
+            <div class="step-content">
+              Adicione a configuracao:
+              <div class="config-file">
+                <button class="copy-btn" onclick="copyConfig(this)">Copiar</button>
+<pre><span class="bracket">{</span>
+  <span class="key">"mcpServers"</span>: <span class="bracket">{</span>
+    <span class="key">"universal-browser"</span>: <span class="bracket">{</span>
+      <span class="key">"serverUrl"</span>: <span class="string">"http://localhost:8080/sse"</span>
+    <span class="bracket">}</span>
+  <span class="bracket">}</span>
+<span class="bracket">}</span></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <section class="server-info" style="margin-top: 40px;">
+      <h2 style="color: #10b981;">
+        <span style="background: #10b981; color: #1a1a2e; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; font-weight: bold;">3</span>
+        Testar a Conexao
+      </h2>
+
+      <p>Apos configurar, teste se esta funcionando:</p>
+
+      <div class="command-box">
+        <button class="copy-btn" onclick="copyCode(this)">Copiar</button>
+        <code>
+          <span class="comment"># Verificar se o servidor esta rodando</span><br>
+          curl http://localhost:8080/health
+        </code>
+      </div>
+
+      <p style="margin-top: 20px;">No seu IDE/CLI, peca ao Claude para:</p>
+      <div class="config-file" style="background: rgba(16, 185, 129, 0.1); border-color: #10b981;">
+<pre style="color: #10b981;">"Crie uma sessao de automacao e navegue para google.com"</pre>
+      </div>
+
+      <div class="note" style="margin-top: 20px;">
+        <div class="note-title">Importante</div>
+        Certifique-se de que a <strong>extensao do browser</strong> esta instalada e conectada ao servidor WebSocket na porta 3002.
+      </div>
+    </section>
+
+    <footer>
+      <p>Universal Browser MCP &copy; 2024</p>
+      <p style="margin-top: 10px;">
+        <a href="https://github.com/anthropics/anthropic-cookbook/tree/main/misc/model_context_protocol">Documentacao MCP</a>
+      </p>
+    </footer>
+  </div>
+
+  <script>
+    function copyCode(btn) {
+      const codeBlock = btn.parentElement.querySelector('code');
+      const text = codeBlock.innerText;
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copiado!';
+        setTimeout(() => btn.textContent = 'Copiar', 2000);
+      });
+    }
+
+    function copyConfig(btn) {
+      const pre = btn.parentElement.querySelector('pre');
+      const text = pre.innerText;
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copiado!';
+        setTimeout(() => btn.textContent = 'Copiar', 2000);
+      });
+    }
+  </script>
+</body>
+</html>

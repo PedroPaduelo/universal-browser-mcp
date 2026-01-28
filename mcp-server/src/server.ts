@@ -4,13 +4,20 @@
  * Universal Browser MCP Server
  * Permite ao Claude controlar qualquer página web via Chrome Extension
  * Suporta múltiplas sessões isoladas para múltiplos Claude Code
+ *
+ * Modo de operação: HTTP/SSE (Server-Sent Events)
+ * - Porta 8080: Servidor HTTP/SSE para clientes MCP
+ * - Porta 3002: WebSocket bridge para a extensão do browser
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
 import { BridgeServer } from './websocket/bridge-server.js';
 import { randomUUID } from 'crypto';
+import { writeFile, mkdir } from 'fs/promises';
+import { dirname } from 'path';
+import { createServer, IncomingMessage, ServerResponse } from 'http';
 
 // Schemas de validação
 const NavigateToSchema = z.object({
@@ -113,15 +120,16 @@ const ScrollToSchema = z.object({
   }).optional()
 });
 
-// Inicializa servidor
-const bridgeServer = new BridgeServer(3002);
-const mcpServer = new McpServer({
-  name: 'universal-browser-mcp',
-  version: '2.0.0'
-});
-
 // Gera um ID de sessão único para esta instância do MCP
 const instanceSessionId = `mcp_${randomUUID().slice(0, 8)}`;
+
+// Inicializa servidor com o ID da instância
+const bridgeServer = new BridgeServer(3002, instanceSessionId);
+const mcpServer = new McpServer({
+  name: 'universal-browser-mcp',
+  version: '2.1.0' // Atualizado para suportar múltiplos clientes
+});
+
 console.error(`[MCP] Instance session ID: ${instanceSessionId}`);
 
 // ==================== TOOLS DE SESSÃO ====================
@@ -285,23 +293,26 @@ mcpServer.tool(
     const connectedSessions = bridgeServer.getConnectedSessions();
     const sessionsInfo = bridgeServer.getSessionsInfo();
     const backgroundConnected = bridgeServer.isBackgroundConnected();
+    const isServerMode = bridgeServer.isServer();
 
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
           instanceId: instanceSessionId,
+          mode: isServerMode ? 'server' : 'client',
           currentSession,
           isConnected: currentSession ? bridgeServer.isSessionConnected(currentSession) : false,
           backgroundConnected,
           totalConnections: bridgeServer.getConnectionCount(),
+          mcpClientsConnected: isServerMode ? bridgeServer.getMcpClientCount() : 0,
           connectedSessions,
           sessionsInfo,
           message: !backgroundConnected
             ? 'Extensão não conectada. Abra o Chrome e verifique a extensão Universal Browser MCP.'
             : currentSession
               ? (bridgeServer.isSessionConnected(currentSession)
-                ? 'Sessão ativa e conectada!'
+                ? `Sessão ativa e conectada! (modo: ${isServerMode ? 'servidor' : 'cliente'})`
                 : 'Sessão configurada mas aguardando conexão do browser')
               : 'Extensão conectada. Use create_automation_session para começar.'
         }, null, 2)
@@ -1115,26 +1126,68 @@ mcpServer.tool(
 
 mcpServer.tool(
   'take_screenshot',
-  `Captura um screenshot da página atual na janela de automação.
+  `Captura um screenshot da página atual e salva em arquivo.
+
+PARÂMETROS:
+- savePath: Caminho completo onde salvar o arquivo (ex: /tmp/screenshot.jpg)
+- format: 'jpeg' ou 'png' (padrão: 'jpeg' - menor tamanho)
+- quality: 1-100 para JPEG (padrão: 50 - bom balanço qualidade/tamanho)
 
 RETORNA:
-- dataUrl: Imagem em formato base64 (data:image/png;base64,...)
-- Pode ser salvo como arquivo ou exibido diretamente
+- savedPath: Caminho do arquivo salvo
+- size: Tamanho em bytes
 
 ÚTIL PARA:
 - Documentar estado da página
 - Debug visual
-- Verificar layout`,
-  {},
-  async () => {
+- Verificar layout
+
+DICA: Use quality baixo (30-50) para screenshots de debug, alto (80-100) para documentação.`,
+  {
+    savePath: z.string().describe('Caminho completo onde salvar o screenshot (ex: /tmp/screenshot.jpg)'),
+    format: z.enum(['jpeg', 'png']).optional().describe('Formato da imagem: jpeg (menor) ou png (sem perda). Padrão: jpeg'),
+    quality: z.number().min(1).max(100).optional().describe('Qualidade JPEG 1-100. Padrão: 50. Ignorado para PNG.')
+  },
+  async ({ savePath, format, quality }) => {
     if (!bridgeServer.isBackgroundConnected()) {
       return { content: [{ type: 'text', text: 'Erro: Extensão não conectada.' }] };
     }
 
     try {
       const sessionId = bridgeServer.getCurrentSession();
-      const result = await bridgeServer.sendCommandToBackground('take_screenshot_command', { sessionId });
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      const result = await bridgeServer.sendCommandToBackground('take_screenshot_command', {
+        sessionId,
+        format: format || 'jpeg',
+        quality: quality || 50
+      }) as { success: boolean; dataUrl?: string; error?: string };
+
+      if (!result.success || !result.dataUrl) {
+        return { content: [{ type: 'text', text: `Erro: ${result.error || 'Screenshot falhou'}` }] };
+      }
+
+      // Extrair dados base64 do dataUrl (formato: data:image/jpeg;base64,XXXX)
+      const base64Data = result.dataUrl.replace(/^data:image\/\w+;base64,/, '');
+      const buffer = Buffer.from(base64Data, 'base64');
+
+      // Criar diretório se não existir
+      await mkdir(dirname(savePath), { recursive: true });
+
+      // Salvar arquivo
+      await writeFile(savePath, buffer);
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            success: true,
+            savedPath: savePath,
+            size: buffer.length,
+            sizeFormatted: buffer.length > 1024 * 1024
+              ? `${(buffer.length / (1024 * 1024)).toFixed(2)} MB`
+              : `${(buffer.length / 1024).toFixed(2)} KB`
+          }, null, 2)
+        }]
+      };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro ao capturar screenshot: ${(error as Error).message}` }] };
     }
@@ -1209,18 +1262,20 @@ mcpServer.tool(
     const currentSession = bridgeServer.getCurrentSession();
     const isConnected = bridgeServer.isConnected();
     const connectedSessions = bridgeServer.getConnectedSessions();
+    const isServerMode = bridgeServer.isServer();
 
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
           instanceId: instanceSessionId,
+          mode: isServerMode ? 'server' : 'client',
           currentSession,
           isConnected,
           totalConnections: bridgeServer.getConnectionCount(),
           connectedSessions,
           message: isConnected
-            ? `Conectado à sessão ${currentSession}. Pronto para automação!`
+            ? `Conectado à sessão ${currentSession}. Pronto para automação! (modo: ${isServerMode ? 'servidor' : 'cliente'})`
             : currentSession
             ? `Sessão ${currentSession} configurada mas aguardando conexão do browser.`
             : 'Nenhuma sessão ativa. Use create_automation_session para começar.'
@@ -1666,28 +1721,148 @@ Agora o MCP usa **janelas dedicadas** para automação, permitindo:
 
 // ==================== INICIALIZAÇÃO ====================
 
-async function main() {
-  console.error('[MCP] Starting Universal Browser MCP Server v2.0...');
-  console.error(`[MCP] Instance ID: ${instanceSessionId}`);
+const HTTP_PORT = 8080;
 
-  // Inicia o WebSocket bridge
+// Map para gerenciar transportes SSE ativos
+const activeTransports = new Map<string, SSEServerTransport>();
+
+async function main() {
+  console.log('[MCP] Starting Universal Browser MCP Server v2.1 (SSE Mode)...');
+  console.log(`[MCP] Instance ID: ${instanceSessionId}`);
+
+  // Inicia o WebSocket bridge para a extensão do browser
   await bridgeServer.start();
 
-  // Conecta ao transporte stdio
-  const transport = new StdioServerTransport();
-  await mcpServer.connect(transport);
+  const mode = bridgeServer.isServer() ? 'SERVER' : 'CLIENT';
+  console.log(`[MCP] WebSocket bridge running in ${mode} mode on port 3002`);
 
-  console.error('[MCP] Server running. Use create_automation_session to start.');
+  // Cria servidor HTTP para SSE
+  const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    // CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    const url = new URL(req.url || '/', `http://localhost:${HTTP_PORT}`);
+
+    // Endpoint SSE - cliente se conecta aqui para receber eventos
+    if (url.pathname === '/sse' && req.method === 'GET') {
+      console.log('[MCP] New SSE client connecting...');
+
+      const transport = new SSEServerTransport('/messages', res);
+      const clientId = randomUUID();
+      activeTransports.set(clientId, transport);
+
+      // Conecta o MCP server ao transporte
+      await mcpServer.connect(transport);
+
+      console.log(`[MCP] SSE client connected: ${clientId}`);
+
+      // Cleanup quando o cliente desconecta
+      res.on('close', () => {
+        console.log(`[MCP] SSE client disconnected: ${clientId}`);
+        activeTransports.delete(clientId);
+      });
+
+      return;
+    }
+
+    // Endpoint para receber mensagens dos clientes
+    if (url.pathname === '/messages' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => {
+        body += chunk.toString();
+      });
+
+      req.on('end', async () => {
+        // Encontra o transporte ativo e envia a mensagem
+        // O SSEServerTransport espera que as mensagens sejam enviadas via POST
+        for (const transport of activeTransports.values()) {
+          try {
+            await transport.handlePostMessage(req, res, body);
+            return;
+          } catch {
+            // Continua para o próximo
+          }
+        }
+
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'No active transport found' }));
+      });
+
+      return;
+    }
+
+    // Health check endpoint
+    if (url.pathname === '/health' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'ok',
+        instanceId: instanceSessionId,
+        bridgeMode: mode,
+        activeClients: activeTransports.size,
+        backgroundConnected: bridgeServer.isBackgroundConnected()
+      }));
+      return;
+    }
+
+    // Info endpoint
+    if (url.pathname === '/' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        name: 'Universal Browser MCP Server',
+        version: '2.1.0',
+        transport: 'SSE',
+        endpoints: {
+          sse: '/sse',
+          messages: '/messages',
+          health: '/health'
+        },
+        usage: {
+          connect: `GET http://localhost:${HTTP_PORT}/sse`,
+          sendMessage: `POST http://localhost:${HTTP_PORT}/messages`
+        }
+      }));
+      return;
+    }
+
+    // 404 para outras rotas
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not found' }));
+  });
+
+  httpServer.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`[MCP] ERROR: Port ${HTTP_PORT} already in use!`);
+      console.error('[MCP] Another instance may be running. Use a different port or stop the other instance.');
+      process.exit(1);
+    }
+    throw error;
+  });
+
+  httpServer.listen(HTTP_PORT, () => {
+    console.log(`[MCP] HTTP/SSE server listening on http://localhost:${HTTP_PORT}`);
+    console.log(`[MCP] Connect via: GET http://localhost:${HTTP_PORT}/sse`);
+    console.log('[MCP] Server running. Use create_automation_session to start.');
+  });
 
   // Cleanup ao sair
   process.on('SIGINT', () => {
-    console.error('[MCP] Shutting down...');
+    console.log('[MCP] Shutting down...');
+    httpServer.close();
     bridgeServer.stop();
     process.exit(0);
   });
 
   process.on('SIGTERM', () => {
-    console.error('[MCP] Shutting down...');
+    console.log('[MCP] Shutting down...');
+    httpServer.close();
     bridgeServer.stop();
     process.exit(0);
   });

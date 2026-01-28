@@ -112,12 +112,18 @@ export function sendToMCP(message) {
 
 /**
  * Envia resposta para uma requisição
+ * @param {string} requestId - ID da requisição
+ * @param {boolean} success - Se a operação foi bem-sucedida
+ * @param {any} data - Dados da resposta
+ * @param {string} error - Mensagem de erro (se houver)
+ * @param {string} mcpInstanceId - ID da instância MCP para roteamento
  */
-export function sendResponse(requestId, success, data, error = null) {
+export function sendResponse(requestId, success, data, error = null, mcpInstanceId = null) {
   return sendToMCP({
     type: 'response',
     requestId,
     sessionId: '__background__',
+    mcpInstanceId, // Inclui para roteamento correto entre instâncias MCP
     success,
     data,
     error

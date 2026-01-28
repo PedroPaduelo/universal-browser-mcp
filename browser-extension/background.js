@@ -168,9 +168,9 @@ function scheduleReconnect() {
 
 // Processa mensagens do servidor MCP
 async function handleMCPMessage(message) {
-  const { type, requestId, sessionId, data } = message;
+  const { type, requestId, sessionId, mcpInstanceId, data } = message;
 
-  console.log('[Universal MCP] Received from MCP:', type, sessionId);
+  console.log('[Universal MCP] Received from MCP:', type, sessionId, mcpInstanceId ? `(from: ${mcpInstanceId})` : '');
 
   // Ignora mensagens que não são para o background
   if (sessionId && sessionId !== '__background__' && !sessionId.startsWith('session_')) {
@@ -211,7 +211,7 @@ async function handleMCPMessage(message) {
 
       case 'take_screenshot_command':
         // Captura screenshot da janela de automação
-        result = await takeScreenshotOfSession(data?.sessionId);
+        result = await takeScreenshotOfSession(data?.sessionId, data?.format, data?.quality);
         break;
 
       default:
@@ -225,11 +225,13 @@ async function handleMCPMessage(message) {
   }
 
   // Envia resposta se houver requestId
+  // IMPORTANTE: Inclui mcpInstanceId para rotear a resposta de volta ao cliente correto
   if (requestId && mcpWebSocket && mcpWebSocket.readyState === WebSocket.OPEN) {
     mcpWebSocket.send(JSON.stringify({
       type: 'response',
       requestId,
       sessionId: '__background__',
+      mcpInstanceId, // Inclui o ID da instância MCP que fez a requisição
       success,
       data: result,
       error
@@ -347,13 +349,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'take_screenshot':
       const screenshotSession = automationSessions.get(message.sessionId);
+      const screenshotFormat = message.format || 'jpeg';
+      const screenshotOptions = { format: screenshotFormat };
+      if (screenshotFormat === 'jpeg') {
+        screenshotOptions.quality = Math.max(1, Math.min(100, message.quality || 50));
+      }
       if (screenshotSession) {
-        chrome.tabs.captureVisibleTab(screenshotSession.windowId, { format: 'png' }, (dataUrl) => {
+        chrome.tabs.captureVisibleTab(screenshotSession.windowId, screenshotOptions, (dataUrl) => {
           sendResponse({ success: true, dataUrl });
         });
       } else {
         // Fallback: screenshot da janela atual
-        chrome.tabs.captureVisibleTab(null, { format: 'png' }, (dataUrl) => {
+        chrome.tabs.captureVisibleTab(null, screenshotOptions, (dataUrl) => {
           sendResponse({ success: true, dataUrl });
         });
       }
@@ -510,8 +517,11 @@ async function closeAutomationSession(sessionId) {
 
 /**
  * Captura screenshot de uma sessão de automação
+ * @param {string} sessionId - ID da sessão (opcional)
+ * @param {string} format - 'jpeg' ou 'png' (padrão: 'jpeg')
+ * @param {number} quality - Qualidade JPEG 1-100 (padrão: 50)
  */
-async function takeScreenshotOfSession(sessionId) {
+async function takeScreenshotOfSession(sessionId, format = 'jpeg', quality = 50) {
   // Se não informou sessionId, usa a primeira sessão ativa
   let targetSession = null;
 
@@ -527,12 +537,19 @@ async function takeScreenshotOfSession(sessionId) {
   }
 
   try {
-    const dataUrl = await chrome.tabs.captureVisibleTab(targetSession.windowId, { format: 'png' });
+    // Configura opções do screenshot
+    const captureOptions = { format: format };
+    if (format === 'jpeg') {
+      captureOptions.quality = Math.max(1, Math.min(100, quality));
+    }
+
+    const dataUrl = await chrome.tabs.captureVisibleTab(targetSession.windowId, captureOptions);
     return {
       success: true,
       dataUrl,
       windowId: targetSession.windowId,
-      format: 'png',
+      format: format,
+      quality: format === 'jpeg' ? captureOptions.quality : null,
       timestamp: Date.now()
     };
   } catch (error) {
@@ -1163,7 +1180,7 @@ chrome.debugger.onDetach.addListener((source, reason) => {
 // Adiciona handlers para mensagens MCP de debugging
 const originalHandleMCPMessage = handleMCPMessage;
 handleMCPMessage = async function(message) {
-  const { type, requestId, sessionId, data } = message;
+  const { type, requestId, sessionId, mcpInstanceId, data } = message;
 
   let result = null;
   let success = true;
@@ -1248,11 +1265,13 @@ handleMCPMessage = async function(message) {
   }
 
   // Envia resposta
+  // IMPORTANTE: Inclui mcpInstanceId para rotear a resposta de volta ao cliente correto
   if (requestId && mcpWebSocket && mcpWebSocket.readyState === WebSocket.OPEN) {
     mcpWebSocket.send(JSON.stringify({
       type: 'response',
       requestId,
       sessionId: '__background__',
+      mcpInstanceId, // Inclui o ID da instância MCP que fez a requisição
       success,
       data: result,
       error

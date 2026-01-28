@@ -339,11 +339,12 @@ class UniversalBrowserBridge {
     }
   }
 
-  sendResponse(requestId, success, data, error = null) {
+  sendResponse(requestId, success, data, error = null, mcpInstanceId = null) {
     this.sendMessage({
       type: 'response',
       requestId,
       sessionId: this.sessionId,
+      mcpInstanceId, // Inclui o ID da instância MCP para roteamento correto
       success,
       data,
       error
@@ -353,9 +354,9 @@ class UniversalBrowserBridge {
   // ==================== MESSAGE HANDLER ====================
 
   async handleMessage(message) {
-    const { type, requestId, data } = message;
+    const { type, requestId, data, mcpInstanceId } = message;
 
-    console.log(`[Universal MCP] [${this.sessionId}] Received:`, type);
+    console.log(`[Universal MCP] [${this.sessionId}] Received:`, type, mcpInstanceId ? `(from: ${mcpInstanceId})` : '');
     this.updateStatus('processing');
 
     try {
@@ -492,11 +493,12 @@ class UniversalBrowserBridge {
           throw new Error(`Unknown message type: ${type}`);
       }
 
-      this.sendResponse(requestId, true, result);
+      // Inclui mcpInstanceId na resposta para roteamento correto
+      this.sendResponse(requestId, true, result, null, mcpInstanceId);
 
     } catch (error) {
       console.error('[Universal MCP] Handler error:', error);
-      this.sendResponse(requestId, false, null, error.message);
+      this.sendResponse(requestId, false, null, error.message, mcpInstanceId);
     }
 
     this.updateStatus(this.isConnected ? 'connected' : 'disconnected');

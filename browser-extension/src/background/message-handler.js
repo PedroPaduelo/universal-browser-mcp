@@ -31,9 +31,9 @@ import { sendResponse } from './websocket-client.js';
  * Processa mensagens do servidor MCP
  */
 export async function handleMCPMessage(message) {
-  const { type, requestId, sessionId, data } = message;
+  const { type, requestId, sessionId, mcpInstanceId, data } = message;
 
-  console.log('[Universal MCP] Received from MCP:', type, sessionId);
+  console.log('[Universal MCP] Received from MCP:', type, sessionId, mcpInstanceId ? `(from: ${mcpInstanceId})` : '');
 
   if (sessionId && sessionId !== '__background__' && !sessionId.startsWith('session_')) {
     return;
@@ -59,7 +59,7 @@ export async function handleMCPMessage(message) {
         break;
 
       case 'take_screenshot_command':
-        result = await takeScreenshotOfSession(data?.sessionId);
+        result = await takeScreenshotOfSession(data?.sessionId, data?.format, data?.quality);
         break;
 
       case 'ping':
@@ -132,8 +132,9 @@ export async function handleMCPMessage(message) {
     console.error('[Universal MCP] Error handling MCP message:', e);
   }
 
+  // IMPORTANTE: Inclui mcpInstanceId na resposta para roteamento correto
   if (requestId) {
-    sendResponse(requestId, success, result, error);
+    sendResponse(requestId, success, result, error, mcpInstanceId);
   }
 }
 
@@ -233,12 +234,17 @@ export function handleRuntimeMessage(message, sender, sendResponse) {
 
     case 'take_screenshot':
       const screenshotSession = automationSessions.get(message.sessionId);
+      const screenshotFormat = message.format || 'jpeg';
+      const screenshotOptions = { format: screenshotFormat };
+      if (screenshotFormat === 'jpeg') {
+        screenshotOptions.quality = Math.max(1, Math.min(100, message.quality || 50));
+      }
       if (screenshotSession) {
-        chrome.tabs.captureVisibleTab(screenshotSession.windowId, { format: 'png' }, (dataUrl) => {
+        chrome.tabs.captureVisibleTab(screenshotSession.windowId, screenshotOptions, (dataUrl) => {
           sendResponse({ success: true, dataUrl });
         });
       } else {
-        chrome.tabs.captureVisibleTab(null, { format: 'png' }, (dataUrl) => {
+        chrome.tabs.captureVisibleTab(null, screenshotOptions, (dataUrl) => {
           sendResponse({ success: true, dataUrl });
         });
       }

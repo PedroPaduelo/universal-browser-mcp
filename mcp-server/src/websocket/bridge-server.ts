@@ -2,6 +2,10 @@
  * Universal Browser MCP - WebSocket Bridge Server
  * Gerencia múltiplas sessões de automação isoladas
  * Suporta conexão de controle do background.js
+ *
+ * IMPORTANTE: Suporta múltiplas instâncias MCP conectando ao mesmo servidor
+ * - Primeira instância: Cria o servidor WebSocket
+ * - Instâncias adicionais: Conectam como clientes ao servidor existente
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
@@ -11,6 +15,7 @@ export interface BridgeMessage {
   data?: unknown;
   requestId?: string;
   sessionId?: string;
+  mcpInstanceId?: string; // ID da instância MCP que enviou/deve receber
   success?: boolean;
   error?: string;
 }
@@ -28,6 +33,8 @@ interface SessionClient {
   url?: string;
   connectedAt: number;
   isBackground?: boolean;
+  isMcpClient?: boolean;
+  mcpInstanceId?: string;
 }
 
 export class BridgeServer {
@@ -40,25 +47,50 @@ export class BridgeServer {
   private port: number;
   private currentSessionId: string | null = null;
 
-  constructor(port: number = 3002) {
+  // Suporte para múltiplas instâncias MCP
+  private mcpInstanceId: string;
+  private isServerMode: boolean = false;
+  private clientWs: WebSocket | null = null; // WebSocket client (quando não é servidor)
+  private mcpClients: Map<string, WebSocket> = new Map(); // mcpInstanceId -> WebSocket (quando é servidor)
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 10;
+
+  constructor(port: number = 3002, instanceId?: string) {
     this.port = port;
+    this.mcpInstanceId = instanceId || `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  /**
+   * Retorna o ID desta instância MCP
+   */
+  getInstanceId(): string {
+    return this.mcpInstanceId;
+  }
+
+  /**
+   * Define o ID da instância (chamado do server.ts)
+   */
+  setInstanceId(id: string): void {
+    this.mcpInstanceId = id;
   }
 
   /**
    * Verifica se o background está conectado
+   * Em modo cliente, assume conectado se o cliente WebSocket está ativo
    */
   isBackgroundConnected(): boolean {
-    return this.backgroundClient !== null && this.backgroundClient.readyState === WebSocket.OPEN;
+    if (this.isServerMode) {
+      return this.backgroundClient !== null && this.backgroundClient.readyState === WebSocket.OPEN;
+    } else {
+      // Em modo cliente, verifica se o WebSocket está conectado
+      return this.clientWs !== null && this.clientWs.readyState === WebSocket.OPEN;
+    }
   }
 
   /**
    * Envia comando para o background criar uma sessão
    */
   async createSessionViaBackground(sessionId: string, url?: string): Promise<unknown> {
-    if (!this.isBackgroundConnected()) {
-      throw new Error('Background not connected. Please ensure the Chrome extension is running.');
-    }
-
     const requestId = `bg_${++this.requestCounter}_${Date.now()}`;
 
     return new Promise((resolve, reject) => {
@@ -74,12 +106,31 @@ export class BridgeServer {
         sessionId: '__background__'
       });
 
-      this.backgroundClient!.send(JSON.stringify({
+      const message = JSON.stringify({
         type: 'create_session_command',
         requestId,
         sessionId: '__background__',
+        mcpInstanceId: this.mcpInstanceId,
         data: { sessionId, url: url || 'about:blank' }
-      }));
+      });
+
+      if (this.isServerMode) {
+        if (!this.backgroundClient || this.backgroundClient.readyState !== WebSocket.OPEN) {
+          this.pendingRequests.delete(requestId);
+          clearTimeout(timeoutHandle);
+          reject(new Error('Background not connected. Please ensure the Chrome extension is running.'));
+          return;
+        }
+        this.backgroundClient.send(message);
+      } else {
+        if (!this.clientWs || this.clientWs.readyState !== WebSocket.OPEN) {
+          this.pendingRequests.delete(requestId);
+          clearTimeout(timeoutHandle);
+          reject(new Error('Not connected to bridge server.'));
+          return;
+        }
+        this.clientWs.send(message);
+      }
     });
   }
 
@@ -87,10 +138,6 @@ export class BridgeServer {
    * Envia comando genérico para o background
    */
   async sendCommandToBackground(commandType: string, data?: unknown): Promise<unknown> {
-    if (!this.isBackgroundConnected()) {
-      throw new Error('Background not connected. Please ensure the Chrome extension is running.');
-    }
-
     const requestId = `bg_${++this.requestCounter}_${Date.now()}`;
 
     return new Promise((resolve, reject) => {
@@ -106,12 +153,31 @@ export class BridgeServer {
         sessionId: '__background__'
       });
 
-      this.backgroundClient!.send(JSON.stringify({
+      const message = JSON.stringify({
         type: commandType,
         requestId,
         sessionId: '__background__',
+        mcpInstanceId: this.mcpInstanceId,
         data
-      }));
+      });
+
+      if (this.isServerMode) {
+        if (!this.backgroundClient || this.backgroundClient.readyState !== WebSocket.OPEN) {
+          this.pendingRequests.delete(requestId);
+          clearTimeout(timeoutHandle);
+          reject(new Error('Background not connected. Please ensure the Chrome extension is running.'));
+          return;
+        }
+        this.backgroundClient.send(message);
+      } else {
+        if (!this.clientWs || this.clientWs.readyState !== WebSocket.OPEN) {
+          this.pendingRequests.delete(requestId);
+          clearTimeout(timeoutHandle);
+          reject(new Error('Not connected to bridge server.'));
+          return;
+        }
+        this.clientWs.send(message);
+      }
     });
   }
 
@@ -136,12 +202,13 @@ export class BridgeServer {
         this.wss = new WebSocketServer({ port: this.port });
 
         this.wss.on('listening', () => {
-          console.error(`[Bridge] WebSocket server running on port ${this.port}`);
+          this.isServerMode = true;
+          console.error(`[Bridge] WebSocket server running on port ${this.port} (instance: ${this.mcpInstanceId})`);
           resolve();
         });
 
         this.wss.on('connection', (ws: WebSocket) => {
-          console.error('[Bridge] New browser connection');
+          console.error('[Bridge] New connection received');
 
           ws.on('message', (data: Buffer) => {
             try {
@@ -155,10 +222,13 @@ export class BridgeServer {
           ws.on('close', () => {
             const client = this.clients.get(ws);
             if (client) {
-              console.error(`[Bridge] Browser disconnected (session: ${client.sessionId})`);
+              console.error(`[Bridge] Connection closed (session: ${client.sessionId})`);
               if (client.isBackground) {
                 this.backgroundClient = null;
                 console.error('[Bridge] Background controller disconnected');
+              } else if (client.isMcpClient && client.mcpInstanceId) {
+                this.mcpClients.delete(client.mcpInstanceId);
+                console.error(`[Bridge] MCP client disconnected: ${client.mcpInstanceId}`);
               } else {
                 this.sessionClients.delete(client.sessionId);
               }
@@ -172,6 +242,8 @@ export class BridgeServer {
             if (client) {
               if (client.isBackground) {
                 this.backgroundClient = null;
+              } else if (client.isMcpClient && client.mcpInstanceId) {
+                this.mcpClients.delete(client.mcpInstanceId);
               } else {
                 this.sessionClients.delete(client.sessionId);
               }
@@ -182,10 +254,13 @@ export class BridgeServer {
 
         this.wss.on('error', (error: NodeJS.ErrnoException) => {
           if (error.code === 'EADDRINUSE') {
-            console.error(`[Bridge] Port ${this.port} already in use - another MCP instance is running`);
-            console.error('[Bridge] This is OK - will connect to existing bridge server');
-            // Não rejeita, apenas avisa
-            resolve();
+            console.error(`[Bridge] Port ${this.port} already in use - connecting as client to existing server`);
+            this.isServerMode = false;
+            this.wss = null;
+            // Conecta como cliente ao servidor existente
+            this.connectAsClient()
+              .then(() => resolve())
+              .catch(reject);
           } else {
             console.error('[Bridge] Server error:', error);
             reject(error);
@@ -198,8 +273,153 @@ export class BridgeServer {
     });
   }
 
+  /**
+   * Conecta como cliente a um servidor WebSocket existente
+   */
+  private connectAsClient(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const wsUrl = `ws://localhost:${this.port}`;
+      console.error(`[Bridge] Connecting as client to ${wsUrl}...`);
+
+      try {
+        this.clientWs = new WebSocket(wsUrl);
+
+        this.clientWs.on('open', () => {
+          console.error(`[Bridge] Connected as client (instance: ${this.mcpInstanceId})`);
+          this.reconnectAttempts = 0;
+
+          // Registra esta instância MCP no servidor
+          this.clientWs!.send(JSON.stringify({
+            type: 'mcp_client_ready',
+            mcpInstanceId: this.mcpInstanceId,
+            data: { timestamp: Date.now() }
+          }));
+
+          resolve();
+        });
+
+        this.clientWs.on('message', (data: Buffer) => {
+          try {
+            const message: BridgeMessage = JSON.parse(data.toString());
+            this.handleClientMessage(message);
+          } catch (error) {
+            console.error('[Bridge] Error parsing client message:', error);
+          }
+        });
+
+        this.clientWs.on('close', () => {
+          console.error('[Bridge] Client connection closed');
+          this.clientWs = null;
+          this.scheduleReconnect();
+        });
+
+        this.clientWs.on('error', (error) => {
+          console.error('[Bridge] Client connection error:', error);
+          if (this.reconnectAttempts === 0) {
+            reject(error);
+          }
+        });
+
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  /**
+   * Agenda reconexão como cliente
+   */
+  private scheduleReconnect(): void {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.error('[Bridge] Max reconnect attempts reached');
+      return;
+    }
+
+    this.reconnectAttempts++;
+    const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 30000);
+    console.error(`[Bridge] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+
+    setTimeout(() => {
+      this.connectAsClient().catch(err => {
+        console.error('[Bridge] Reconnection failed:', err);
+      });
+    }, delay);
+  }
+
+  /**
+   * Processa mensagens quando operando como cliente
+   */
+  private handleClientMessage(message: BridgeMessage): void {
+    const { type, requestId, mcpInstanceId, success, data, error } = message;
+
+    // Ignora mensagens que não são para esta instância
+    if (mcpInstanceId && mcpInstanceId !== this.mcpInstanceId) {
+      return;
+    }
+
+    // Resposta a um request pendente
+    if (type === 'response' && requestId) {
+      const pending = this.pendingRequests.get(requestId);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        this.pendingRequests.delete(requestId);
+
+        if (success) {
+          pending.resolve(data);
+        } else {
+          pending.reject(new Error(error || 'Unknown error'));
+        }
+      }
+      return;
+    }
+
+    // Confirmação de registro
+    if (type === 'mcp_client_registered') {
+      console.error(`[Bridge] Registered with server as ${this.mcpInstanceId}`);
+      return;
+    }
+
+    // Status do background
+    if (type === 'background_status') {
+      console.error('[Bridge] Background status:', data);
+      return;
+    }
+  }
+
   private handleMessage(ws: WebSocket, message: BridgeMessage): void {
-    const { type, requestId, sessionId, success, data, error } = message;
+    const { type, requestId, sessionId, mcpInstanceId, success, data, error } = message;
+
+    // Outro cliente MCP se registrando
+    if (type === 'mcp_client_ready' && mcpInstanceId) {
+      console.error(`[Bridge] MCP client connected: ${mcpInstanceId}`);
+
+      const clientInfo: SessionClient = {
+        ws,
+        sessionId: `__mcp_${mcpInstanceId}__`,
+        connectedAt: Date.now(),
+        isMcpClient: true,
+        mcpInstanceId
+      };
+
+      this.clients.set(ws, clientInfo);
+      this.mcpClients.set(mcpInstanceId, ws);
+
+      // Confirma registro
+      ws.send(JSON.stringify({
+        type: 'mcp_client_registered',
+        mcpInstanceId,
+        data: { serverId: this.mcpInstanceId }
+      }));
+
+      // Informa status do background
+      ws.send(JSON.stringify({
+        type: 'background_status',
+        mcpInstanceId,
+        data: { connected: this.isBackgroundConnected() }
+      }));
+
+      return;
+    }
 
     // Background.js se registrando
     if (type === 'background_ready' && sessionId === '__background__') {
@@ -214,6 +434,18 @@ export class BridgeServer {
       };
 
       this.clients.set(ws, clientInfo);
+
+      // Notifica todos os clientes MCP sobre o background
+      for (const [mcpId, mcpWs] of this.mcpClients) {
+        if (mcpWs.readyState === WebSocket.OPEN) {
+          mcpWs.send(JSON.stringify({
+            type: 'background_status',
+            mcpInstanceId: mcpId,
+            data: { connected: true }
+          }));
+        }
+      }
+
       return;
     }
 
@@ -235,6 +467,15 @@ export class BridgeServer {
 
     // Resposta a um request pendente
     if (type === 'response' && requestId) {
+      // Se a resposta tem mcpInstanceId, roteia para o cliente correto
+      if (mcpInstanceId && mcpInstanceId !== this.mcpInstanceId) {
+        const targetMcp = this.mcpClients.get(mcpInstanceId);
+        if (targetMcp && targetMcp.readyState === WebSocket.OPEN) {
+          targetMcp.send(JSON.stringify(message));
+        }
+        return;
+      }
+
       const pending = this.pendingRequests.get(requestId);
       if (pending) {
         clearTimeout(pending.timeout);
@@ -249,11 +490,50 @@ export class BridgeServer {
       return;
     }
 
+    // Comando de outro cliente MCP para o background (quando este é servidor)
+    if (type.endsWith('_command') && mcpInstanceId && mcpInstanceId !== this.mcpInstanceId) {
+      // Roteia para o background, mantendo o mcpInstanceId para rotear a resposta de volta
+      if (this.backgroundClient && this.backgroundClient.readyState === WebSocket.OPEN) {
+        this.backgroundClient.send(JSON.stringify(message));
+      }
+      return;
+    }
+
     // Health check - atualiza informações do cliente
     if (type === 'health_check' && sessionId) {
       const client = this.clients.get(ws);
       if (client) {
         client.url = (data as { url?: string })?.url;
+      }
+      return;
+    }
+
+    // Roteamento de mensagem para sessão (quando outro cliente MCP envia)
+    if (type === 'route_to_session' && sessionId && mcpInstanceId) {
+      const targetWs = this.sessionClients.get(sessionId);
+      if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+        // Restaura o tipo original da mensagem antes de enviar para o content-script
+        const originalType = (message as { originalType?: string }).originalType;
+        const forwardMessage: BridgeMessage = {
+          type: originalType || 'unknown',
+          requestId: message.requestId,
+          sessionId: message.sessionId,
+          mcpInstanceId: message.mcpInstanceId,
+          data: message.data
+        };
+        targetWs.send(JSON.stringify(forwardMessage));
+      } else {
+        // Sessão não encontrada, envia erro de volta
+        const sourceClient = this.mcpClients.get(mcpInstanceId);
+        if (sourceClient && sourceClient.readyState === WebSocket.OPEN) {
+          sourceClient.send(JSON.stringify({
+            type: 'response',
+            requestId: message.requestId,
+            mcpInstanceId,
+            success: false,
+            error: `No browser connected for session: ${sessionId}`
+          }));
+        }
       }
       return;
     }
@@ -281,15 +561,10 @@ export class BridgeServer {
    * Envia mensagem para uma sessão específica e aguarda resposta
    */
   async sendAndWaitToSession(sessionId: string, message: BridgeMessage, timeout: number = 30000): Promise<unknown> {
-    const ws = this.sessionClients.get(sessionId);
-
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      throw new Error(`No browser connected for session: ${sessionId}. Make sure the automation window is open.`);
-    }
-
     const requestId = `req_${++this.requestCounter}_${Date.now()}`;
     message.requestId = requestId;
     message.sessionId = sessionId;
+    message.mcpInstanceId = this.mcpInstanceId;
 
     return new Promise((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
@@ -304,7 +579,36 @@ export class BridgeServer {
         sessionId
       });
 
-      ws.send(JSON.stringify(message));
+      if (this.isServerMode) {
+        // Modo servidor: envia direto para o content-script da sessão
+        const ws = this.sessionClients.get(sessionId);
+
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          this.pendingRequests.delete(requestId);
+          clearTimeout(timeoutHandle);
+          reject(new Error(`No browser connected for session: ${sessionId}. Make sure the automation window is open.`));
+          return;
+        }
+
+        ws.send(JSON.stringify(message));
+      } else {
+        // Modo cliente: envia via servidor
+        if (!this.clientWs || this.clientWs.readyState !== WebSocket.OPEN) {
+          this.pendingRequests.delete(requestId);
+          clearTimeout(timeoutHandle);
+          reject(new Error('Not connected to bridge server.'));
+          return;
+        }
+
+        // Envia para o servidor que irá rotear para a sessão correta
+        // Preserva o tipo original da mensagem
+        const routeMessage = {
+          ...message,
+          originalType: message.type,
+          type: 'route_to_session'
+        };
+        this.clientWs.send(JSON.stringify(routeMessage));
+      }
     });
   }
 
@@ -324,6 +628,13 @@ export class BridgeServer {
    */
   isConnected(): boolean {
     if (!this.currentSessionId) return false;
+
+    // Em modo cliente, consideramos conectado se estamos conectados ao servidor
+    // A sessão real é gerenciada pelo servidor
+    if (!this.isServerMode) {
+      return this.clientWs !== null && this.clientWs.readyState === WebSocket.OPEN;
+    }
+
     return this.isSessionConnected(this.currentSessionId);
   }
 
@@ -331,6 +642,11 @@ export class BridgeServer {
    * Verifica se há conexão para uma sessão específica
    */
   isSessionConnected(sessionId: string): boolean {
+    if (!this.isServerMode) {
+      // Em modo cliente, assumimos que a sessão existe se estamos conectados
+      return this.clientWs !== null && this.clientWs.readyState === WebSocket.OPEN;
+    }
+
     const ws = this.sessionClients.get(sessionId);
     return ws !== undefined && ws.readyState === WebSocket.OPEN;
   }
@@ -339,6 +655,9 @@ export class BridgeServer {
    * Retorna número total de conexões
    */
   getConnectionCount(): number {
+    if (!this.isServerMode) {
+      return this.clientWs && this.clientWs.readyState === WebSocket.OPEN ? 1 : 0;
+    }
     return this.clients.size;
   }
 
@@ -346,6 +665,10 @@ export class BridgeServer {
    * Retorna lista de sessões conectadas
    */
   getConnectedSessions(): string[] {
+    if (!this.isServerMode) {
+      // Em modo cliente, retorna a sessão atual se existir
+      return this.currentSessionId ? [this.currentSessionId] : [];
+    }
     return Array.from(this.sessionClients.keys());
   }
 
@@ -355,34 +678,73 @@ export class BridgeServer {
   getSessionsInfo(): Array<{ sessionId: string; url?: string; connectedAt: number }> {
     const info: Array<{ sessionId: string; url?: string; connectedAt: number }> = [];
 
+    if (!this.isServerMode) {
+      // Em modo cliente, retorna informação básica
+      if (this.currentSessionId) {
+        info.push({
+          sessionId: this.currentSessionId,
+          connectedAt: Date.now()
+        });
+      }
+      return info;
+    }
+
     for (const [, client] of this.clients) {
-      info.push({
-        sessionId: client.sessionId,
-        url: client.url,
-        connectedAt: client.connectedAt
-      });
+      if (!client.isMcpClient && !client.isBackground) {
+        info.push({
+          sessionId: client.sessionId,
+          url: client.url,
+          connectedAt: client.connectedAt
+        });
+      }
     }
 
     return info;
   }
 
+  /**
+   * Retorna se está operando em modo servidor
+   */
+  isServer(): boolean {
+    return this.isServerMode;
+  }
+
+  /**
+   * Retorna o número de clientes MCP conectados (apenas em modo servidor)
+   */
+  getMcpClientCount(): number {
+    return this.mcpClients.size;
+  }
+
   stop(): void {
     // Limpa requests pendentes
-    for (const [requestId, pending] of this.pendingRequests) {
+    for (const [, pending] of this.pendingRequests) {
       clearTimeout(pending.timeout);
       pending.reject(new Error('Server stopping'));
     }
     this.pendingRequests.clear();
 
-    // Fecha conexões
-    for (const [ws] of this.clients) {
-      ws.close();
-    }
-    this.clients.clear();
-    this.sessionClients.clear();
+    if (this.isServerMode) {
+      // Modo servidor: fecha todas as conexões
+      for (const [ws] of this.clients) {
+        ws.close();
+      }
+      this.clients.clear();
+      this.sessionClients.clear();
+      this.mcpClients.clear();
 
-    // Fecha servidor
-    this.wss?.close();
-    this.wss = null;
+      // Fecha servidor
+      this.wss?.close();
+      this.wss = null;
+    } else {
+      // Modo cliente: fecha conexão com o servidor
+      if (this.clientWs) {
+        this.clientWs.close();
+        this.clientWs = null;
+      }
+    }
+
+    this.backgroundClient = null;
+    console.error(`[Bridge] Stopped (instance: ${this.mcpInstanceId})`);
   }
 }

@@ -157,8 +157,11 @@ export async function closeAutomationSession(sessionId) {
 
 /**
  * Captura screenshot de uma sessão de automação
+ * @param {string} sessionId - ID da sessão (opcional)
+ * @param {string} format - 'jpeg' ou 'png' (padrão: 'jpeg')
+ * @param {number} quality - Qualidade JPEG 1-100 (padrão: 50)
  */
-export async function takeScreenshotOfSession(sessionId) {
+export async function takeScreenshotOfSession(sessionId, format = 'jpeg', quality = 50) {
   let targetSession = null;
 
   if (sessionId) {
@@ -173,12 +176,19 @@ export async function takeScreenshotOfSession(sessionId) {
   }
 
   try {
-    const dataUrl = await chrome.tabs.captureVisibleTab(targetSession.windowId, { format: 'png' });
+    // Configura opções do screenshot
+    const captureOptions = { format: format };
+    if (format === 'jpeg') {
+      captureOptions.quality = Math.max(1, Math.min(100, quality));
+    }
+
+    const dataUrl = await chrome.tabs.captureVisibleTab(targetSession.windowId, captureOptions);
     return {
       success: true,
       dataUrl,
       windowId: targetSession.windowId,
-      format: 'png',
+      format: format,
+      quality: format === 'jpeg' ? captureOptions.quality : null,
       timestamp: Date.now()
     };
   } catch (error) {
