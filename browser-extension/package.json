@@ -1,0 +1,14 @@
+{
+  "name": "universal-browser-mcp-extension",
+  "version": "3.0.0",
+  "description": "Chrome Extension for Universal Browser MCP",
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "watch": "node esbuild.config.js --watch",
+    "clean": "rm -rf dist/*"
+  },
+  "devDependencies": {
+    "chokidar": "^5.0.0",
+    "esbuild": "^0.27.2"
+  }
+}
