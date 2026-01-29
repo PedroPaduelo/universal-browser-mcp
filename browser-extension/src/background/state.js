@@ -2,7 +2,7 @@
  * Estado global compartilhado entre módulos do background
  */
 
-// Armazena sessões ativas: sessionId -> { windowId, tabId, createdAt }
+// Armazena sessões ativas: sessionId -> { windowId, tabs: Map<tabId, {url, title}>, activeTabId, createdAt }
 export const automationSessions = new Map();
 
 // Mapeia windowId -> sessionId para lookup reverso

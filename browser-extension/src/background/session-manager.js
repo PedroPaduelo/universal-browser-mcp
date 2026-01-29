@@ -1,16 +1,16 @@
 /**
- * Gerenciamento de sessões de automação
+ * Gerenciamento de sessões de automação com suporte a múltiplas abas (handles)
  */
 
 import { automationSessions, windowToSession, debuggerState } from './state.js';
 
 /**
- * Limpa o debugger de uma tab antes de reutilizar
+ * Limpa o debugger de uma tab
  */
 async function cleanupDebuggerForTab(tabId) {
   try {
     await chrome.debugger.detach({ tabId });
-    console.log(`[Universal MCP] Detached debugger from tab ${tabId} during cleanup`);
+    console.log(`[Universal MCP] Detached debugger from tab ${tabId}`);
   } catch (e) {
     // Ignora erro se debugger não estava anexado
   }
@@ -18,24 +18,14 @@ async function cleanupDebuggerForTab(tabId) {
 
 /**
  * Cria uma nova sessão de automação com janela dedicada
- * Reutiliza janela existente se houver para evitar múltiplas janelas
  */
 export async function createAutomationSession(sessionId, url = 'about:blank') {
-  // Verifica se já existe sessão com esse ID específico
+  // Verifica se já existe sessão com esse ID
   if (automationSessions.has(sessionId)) {
     const existing = automationSessions.get(sessionId);
 
     try {
       await chrome.windows.get(existing.windowId);
-
-      // Limpa o debugger antes de reutilizar para evitar conflitos
-      await cleanupDebuggerForTab(existing.tabId);
-      debuggerState.delete(sessionId);
-
-      if (url && url !== 'about:blank') {
-        await chrome.tabs.update(existing.tabId, { url });
-      }
-
       await chrome.windows.update(existing.windowId, { focused: true });
 
       console.log(`[Universal MCP] Reusing existing session: ${sessionId}`);
@@ -44,7 +34,8 @@ export async function createAutomationSession(sessionId, url = 'about:blank') {
         success: true,
         sessionId,
         windowId: existing.windowId,
-        tabId: existing.tabId,
+        activeTabId: existing.activeTabId,
+        tabCount: existing.tabs.size,
         message: 'Session already exists, reusing'
       };
     } catch (e) {
@@ -54,51 +45,8 @@ export async function createAutomationSession(sessionId, url = 'about:blank') {
     }
   }
 
-  // Verifica se existe QUALQUER outra sessão de automação ativa
-  if (automationSessions.size > 0) {
-    for (const [existingSessionId, existingData] of automationSessions.entries()) {
-      try {
-        await chrome.windows.get(existingData.windowId);
-
-        console.log(`[Universal MCP] Found existing automation window from session ${existingSessionId}, reusing...`);
-
-        // IMPORTANTE: Limpa o debugger antes de transferir a sessão
-        await cleanupDebuggerForTab(existingData.tabId);
-        debuggerState.delete(existingSessionId);
-
-        if (url && url !== 'about:blank') {
-          await chrome.tabs.update(existingData.tabId, { url });
-        }
-
-        await chrome.windows.update(existingData.windowId, { focused: true });
-
-        automationSessions.delete(existingSessionId);
-        automationSessions.set(sessionId, {
-          windowId: existingData.windowId,
-          tabId: existingData.tabId,
-          createdAt: existingData.createdAt
-        });
-        windowToSession.set(existingData.windowId, sessionId);
-
-        console.log(`[Universal MCP] Transferred window from ${existingSessionId} to ${sessionId}`);
-
-        return {
-          success: true,
-          sessionId,
-          windowId: existingData.windowId,
-          tabId: existingData.tabId,
-          message: 'Reused existing automation window (transferred from previous session)'
-        };
-      } catch (e) {
-        automationSessions.delete(existingSessionId);
-        windowToSession.delete(existingData.windowId);
-        debuggerState.delete(existingSessionId);
-      }
-    }
-  }
-
   // Cria nova janela
-  console.log(`[Universal MCP] No existing automation window found, creating new one...`);
+  console.log(`[Universal MCP] Creating new automation session...`);
 
   const window = await chrome.windows.create({
     url: url || 'about:blank',
@@ -111,22 +59,192 @@ export async function createAutomationSession(sessionId, url = 'about:blank') {
   const tabId = window.tabs[0].id;
   const windowId = window.id;
 
+  // Estrutura com suporte a múltiplas abas
+  const tabs = new Map();
+  tabs.set(tabId, { url: url || 'about:blank', title: '', createdAt: Date.now() });
+
   automationSessions.set(sessionId, {
     windowId,
-    tabId,
+    tabs,
+    activeTabId: tabId,
     createdAt: Date.now()
   });
 
   windowToSession.set(windowId, sessionId);
 
-  console.log(`[Universal MCP] Created automation session: ${sessionId} (window: ${windowId}, tab: ${tabId})`);
+  console.log(`[Universal MCP] Created session: ${sessionId} (window: ${windowId}, tab: ${tabId})`);
 
   return {
     success: true,
     sessionId,
     windowId,
-    tabId,
+    activeTabId: tabId,
+    tabCount: 1,
     message: 'Automation session created'
+  };
+}
+
+/**
+ * Abre uma nova aba na sessão
+ */
+export async function openNewTab(sessionId, url = 'about:blank', switchTo = true) {
+  const session = automationSessions.get(sessionId);
+
+  if (!session) {
+    return { success: false, error: 'Session not found' };
+  }
+
+  const tab = await chrome.tabs.create({
+    windowId: session.windowId,
+    url: url || 'about:blank',
+    active: switchTo
+  });
+
+  session.tabs.set(tab.id, { url: url || 'about:blank', title: '', createdAt: Date.now() });
+
+  if (switchTo) {
+    session.activeTabId = tab.id;
+  }
+
+  console.log(`[Universal MCP] Opened new tab ${tab.id} in session ${sessionId}`);
+
+  return {
+    success: true,
+    tabId: tab.id,
+    tabCount: session.tabs.size,
+    isActive: switchTo
+  };
+}
+
+/**
+ * Retorna todas as abas (handles) da sessão
+ */
+export async function getTabHandles(sessionId) {
+  const session = automationSessions.get(sessionId);
+
+  if (!session) {
+    return { success: false, error: 'Session not found' };
+  }
+
+  const handles = [];
+
+  for (const [tabId, data] of session.tabs.entries()) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      handles.push({
+        tabId,
+        url: tab.url,
+        title: tab.title,
+        isActive: tabId === session.activeTabId,
+        createdAt: data.createdAt
+      });
+    } catch (e) {
+      // Tab foi fechada, remove do registro
+      session.tabs.delete(tabId);
+    }
+  }
+
+  return {
+    success: true,
+    activeTabId: session.activeTabId,
+    tabCount: handles.length,
+    handles
+  };
+}
+
+/**
+ * Muda para uma aba específica
+ */
+export async function switchToTab(sessionId, tabId) {
+  const session = automationSessions.get(sessionId);
+
+  if (!session) {
+    return { success: false, error: 'Session not found' };
+  }
+
+  if (!session.tabs.has(tabId)) {
+    return { success: false, error: `Tab ${tabId} not found in session` };
+  }
+
+  try {
+    await chrome.tabs.update(tabId, { active: true });
+    session.activeTabId = tabId;
+
+    const tab = await chrome.tabs.get(tabId);
+
+    console.log(`[Universal MCP] Switched to tab ${tabId} in session ${sessionId}`);
+
+    return {
+      success: true,
+      tabId,
+      url: tab.url,
+      title: tab.title
+    };
+  } catch (e) {
+    session.tabs.delete(tabId);
+    return { success: false, error: `Tab ${tabId} no longer exists` };
+  }
+}
+
+/**
+ * Fecha uma aba específica
+ */
+export async function closeTab(sessionId, tabId) {
+  const session = automationSessions.get(sessionId);
+
+  if (!session) {
+    return { success: false, error: 'Session not found' };
+  }
+
+  if (!session.tabs.has(tabId)) {
+    return { success: false, error: `Tab ${tabId} not found in session` };
+  }
+
+  // Não permite fechar a última aba
+  if (session.tabs.size === 1) {
+    return { success: false, error: 'Cannot close the last tab. Use close_automation_session instead.' };
+  }
+
+  try {
+    await cleanupDebuggerForTab(tabId);
+    await chrome.tabs.remove(tabId);
+    session.tabs.delete(tabId);
+
+    // Se fechou a aba ativa, muda para outra
+    if (session.activeTabId === tabId) {
+      const nextTabId = session.tabs.keys().next().value;
+      session.activeTabId = nextTabId;
+      await chrome.tabs.update(nextTabId, { active: true });
+    }
+
+    console.log(`[Universal MCP] Closed tab ${tabId} in session ${sessionId}`);
+
+    return {
+      success: true,
+      closedTabId: tabId,
+      newActiveTabId: session.activeTabId,
+      tabCount: session.tabs.size
+    };
+  } catch (e) {
+    session.tabs.delete(tabId);
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Retorna a aba ativa atual
+ */
+export function getCurrentTab(sessionId) {
+  const session = automationSessions.get(sessionId);
+
+  if (!session) {
+    return { success: false, error: 'Session not found' };
+  }
+
+  return {
+    success: true,
+    tabId: session.activeTabId,
+    tabCount: session.tabs.size
   };
 }
 
@@ -138,6 +256,11 @@ export async function closeAutomationSession(sessionId) {
 
   if (!session) {
     return { success: false, error: 'Session not found' };
+  }
+
+  // Limpa debugger de todas as abas
+  for (const tabId of session.tabs.keys()) {
+    await cleanupDebuggerForTab(tabId);
   }
 
   try {
@@ -156,37 +279,26 @@ export async function closeAutomationSession(sessionId) {
 }
 
 /**
- * Captura screenshot de uma sessão de automação
- * @param {string} sessionId - ID da sessão (opcional)
- * @param {string} format - 'jpeg' ou 'png' (padrão: 'jpeg')
- * @param {number} quality - Qualidade JPEG 1-100 (padrão: 50)
+ * Captura screenshot da aba ativa
  */
 export async function takeScreenshotOfSession(sessionId, format = 'jpeg', quality = 50) {
-  let targetSession = null;
+  const session = automationSessions.get(sessionId);
 
-  if (sessionId) {
-    targetSession = automationSessions.get(sessionId);
-  } else if (automationSessions.size > 0) {
-    const [, firstSession] = automationSessions.entries().next().value;
-    targetSession = firstSession;
-  }
-
-  if (!targetSession) {
-    throw new Error('No automation session found for screenshot');
+  if (!session) {
+    throw new Error('No automation session found');
   }
 
   try {
-    // Configura opções do screenshot
     const captureOptions = { format: format };
     if (format === 'jpeg') {
       captureOptions.quality = Math.max(1, Math.min(100, quality));
     }
 
-    const dataUrl = await chrome.tabs.captureVisibleTab(targetSession.windowId, captureOptions);
+    const dataUrl = await chrome.tabs.captureVisibleTab(session.windowId, captureOptions);
     return {
       success: true,
       dataUrl,
-      windowId: targetSession.windowId,
+      tabId: session.activeTabId,
       format: format,
       quality: format === 'jpeg' ? captureOptions.quality : null,
       timestamp: Date.now()
@@ -197,7 +309,7 @@ export async function takeScreenshotOfSession(sessionId, format = 'jpeg', qualit
 }
 
 /**
- * Navega para uma URL dentro de uma sessão específica
+ * Navega para uma URL na aba ativa
  */
 export async function navigateInSession(sessionId, url) {
   const session = automationSessions.get(sessionId);
@@ -206,16 +318,25 @@ export async function navigateInSession(sessionId, url) {
     return { success: false, error: 'Session not found' };
   }
 
-  await chrome.tabs.update(session.tabId, { url });
+  await chrome.tabs.update(session.activeTabId, { url });
 
-  return { success: true, url };
+  return { success: true, tabId: session.activeTabId, url };
 }
 
 /**
  * Retorna informações de uma sessão
  */
 export function getSessionInfo(sessionId) {
-  return automationSessions.get(sessionId);
+  const session = automationSessions.get(sessionId);
+  if (!session) return null;
+
+  return {
+    windowId: session.windowId,
+    tabId: session.activeTabId, // Para compatibilidade
+    activeTabId: session.activeTabId,
+    tabCount: session.tabs.size,
+    createdAt: session.createdAt
+  };
 }
 
 /**
@@ -227,7 +348,8 @@ export function listSessions() {
     sessions.push({
       sessionId,
       windowId: data.windowId,
-      tabId: data.tabId,
+      activeTabId: data.activeTabId,
+      tabCount: data.tabs.size,
       createdAt: data.createdAt
     });
   }
@@ -249,24 +371,58 @@ export function initSessionListeners() {
     }
   });
 
+  // Monitora fechamento de abas
+  chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+    const sessionId = windowToSession.get(removeInfo.windowId);
+    if (sessionId) {
+      const session = automationSessions.get(sessionId);
+      if (session && session.tabs.has(tabId)) {
+        session.tabs.delete(tabId);
+        console.log(`[Universal MCP] Tab ${tabId} removed from session ${sessionId}`);
+
+        // Se era a aba ativa, muda para outra
+        if (session.activeTabId === tabId && session.tabs.size > 0) {
+          session.activeTabId = session.tabs.keys().next().value;
+        }
+      }
+    }
+  });
+
   // Monitora navegação
   chrome.webNavigation.onCompleted.addListener((details) => {
     if (details.frameId === 0) {
       const sessionId = windowToSession.get(details.windowId);
       if (sessionId) {
-        console.log(`[Universal MCP] Navigation completed in session ${sessionId}:`, details.url);
+        const session = automationSessions.get(sessionId);
+        if (session && session.tabs.has(details.tabId)) {
+          session.tabs.get(details.tabId).url = details.url;
+        }
       }
     }
   });
 
-  // Monitora mudanças de tab
+  // Monitora mudanças de aba ativa
   chrome.tabs.onActivated.addListener((activeInfo) => {
     const sessionId = windowToSession.get(activeInfo.windowId);
     if (sessionId) {
       const session = automationSessions.get(sessionId);
-      if (session && session.tabId !== activeInfo.tabId) {
-        console.log(`[Universal MCP] Tab changed in session ${sessionId}: ${session.tabId} -> ${activeInfo.tabId}`);
-        session.tabId = activeInfo.tabId;
+      if (session && session.tabs.has(activeInfo.tabId)) {
+        session.activeTabId = activeInfo.tabId;
+        console.log(`[Universal MCP] Active tab changed to ${activeInfo.tabId} in session ${sessionId}`);
+      }
+    }
+  });
+
+  // Monitora criação de abas (ex: target="_blank")
+  chrome.tabs.onCreated.addListener((tab) => {
+    if (tab.windowId) {
+      const sessionId = windowToSession.get(tab.windowId);
+      if (sessionId) {
+        const session = automationSessions.get(sessionId);
+        if (session && !session.tabs.has(tab.id)) {
+          session.tabs.set(tab.id, { url: tab.url || 'about:blank', title: '', createdAt: Date.now() });
+          console.log(`[Universal MCP] New tab ${tab.id} detected in session ${sessionId}`);
+        }
       }
     }
   });

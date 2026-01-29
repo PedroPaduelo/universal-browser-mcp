@@ -8,7 +8,12 @@ import {
   closeAutomationSession,
   takeScreenshotOfSession,
   navigateInSession,
-  listSessions
+  listSessions,
+  openNewTab,
+  getTabHandles,
+  switchToTab,
+  closeTab,
+  getCurrentTab
 } from './session-manager.js';
 import {
   attachDebugger,
@@ -56,6 +61,27 @@ export async function handleMCPMessage(message) {
 
       case 'get_sessions_command':
         result = { sessions: listSessions() };
+        break;
+
+      // Tab management commands
+      case 'open_new_tab_command':
+        result = await openNewTab(data.sessionId, data.url, data.switchTo !== false);
+        break;
+
+      case 'get_tab_handles_command':
+        result = await getTabHandles(data.sessionId);
+        break;
+
+      case 'switch_to_tab_command':
+        result = await switchToTab(data.sessionId, data.tabId);
+        break;
+
+      case 'close_tab_command':
+        result = await closeTab(data.sessionId, data.tabId);
+        break;
+
+      case 'get_current_tab_command':
+        result = getCurrentTab(data.sessionId);
         break;
 
       case 'take_screenshot_command':
@@ -152,7 +178,7 @@ export function handleRuntimeMessage(message, sender, sendResponse) {
         sessions: Array.from(automationSessions.entries()).map(([id, data]) => ({
           sessionId: id,
           windowId: data.windowId,
-          tabId: data.tabId
+          tabId: data.activeTabId
         }))
       });
       break;
@@ -172,13 +198,13 @@ export function handleRuntimeMessage(message, sender, sendResponse) {
     case 'get_session_info':
       const session = automationSessions.get(message.sessionId);
       if (session) {
-        chrome.tabs.get(session.tabId, (tab) => {
+        chrome.tabs.get(session.activeTabId, (tab) => {
           sendResponse({
             success: true,
             session: {
               sessionId: message.sessionId,
               windowId: session.windowId,
-              tabId: session.tabId,
+              tabId: session.activeTabId,
               url: tab?.url || null,
               title: tab?.title || null
             }
@@ -197,7 +223,7 @@ export function handleRuntimeMessage(message, sender, sendResponse) {
         const sessionId = windowToSession.get(windowId);
         const sessionData = automationSessions.get(sessionId);
 
-        if (sessionData && sessionData.tabId === tabId) {
+        if (sessionData && sessionData.activeTabId === tabId) {
           sendResponse({ isAutomationTab: true, sessionId });
         } else {
           sendResponse({ isAutomationTab: false });

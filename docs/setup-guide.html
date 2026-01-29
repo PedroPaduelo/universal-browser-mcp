@@ -44,15 +44,26 @@
       font-size: 1.1rem;
     }
 
-    .server-info {
+    .badge {
+      display: inline-block;
+      background: linear-gradient(90deg, #10b981, #059669);
+      color: #fff;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      margin-left: 10px;
+      vertical-align: middle;
+    }
+
+    .section {
       background: rgba(255, 255, 255, 0.05);
       border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 16px;
       padding: 30px;
-      margin-bottom: 40px;
+      margin-bottom: 30px;
     }
 
-    .server-info h2 {
+    .section h2 {
       color: #00d4ff;
       margin-bottom: 20px;
       display: flex;
@@ -60,8 +71,7 @@
       gap: 10px;
     }
 
-    .server-info h2::before {
-      content: "1";
+    .section h2 .num {
       background: #00d4ff;
       color: #1a1a2e;
       width: 30px;
@@ -72,6 +82,60 @@
       justify-content: center;
       font-size: 0.9rem;
       font-weight: bold;
+    }
+
+    .mode-selector {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+
+    .mode-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 2px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 25px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .mode-card:hover {
+      border-color: #00d4ff;
+      transform: translateY(-3px);
+    }
+
+    .mode-card.active {
+      border-color: #00d4ff;
+      background: rgba(0, 212, 255, 0.1);
+    }
+
+    .mode-card h3 {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .mode-card h3 .icon {
+      font-size: 1.5rem;
+    }
+
+    .mode-card p {
+      color: #888;
+      font-size: 0.9rem;
+    }
+
+    .mode-card .features {
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .mode-card .features li {
+      color: #10b981;
+      font-size: 0.85rem;
+      margin-bottom: 5px;
     }
 
     .command-box {
@@ -116,7 +180,7 @@
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
       gap: 25px;
-      margin-top: 40px;
+      margin-top: 20px;
     }
 
     .card {
@@ -238,10 +302,6 @@
       margin-bottom: 5px;
     }
 
-    .endpoints {
-      margin-top: 30px;
-    }
-
     .endpoint-table {
       width: 100%;
       border-collapse: collapse;
@@ -280,6 +340,42 @@
     .method.get { background: #238636; color: #fff; }
     .method.post { background: #1f6feb; color: #fff; }
 
+    .tools-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-top: 20px;
+    }
+
+    .tool-item {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 15px;
+    }
+
+    .tool-item code {
+      color: #7ee787;
+      font-family: 'Fira Code', 'Consolas', monospace;
+      font-size: 0.85rem;
+    }
+
+    .tool-item p {
+      color: #888;
+      font-size: 0.8rem;
+      margin-top: 5px;
+    }
+
+    .new-badge {
+      background: #f59e0b;
+      color: #1a1a2e;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.65rem;
+      font-weight: bold;
+      margin-left: 5px;
+    }
+
     footer {
       text-align: center;
       margin-top: 60px;
@@ -293,9 +389,12 @@
       text-decoration: none;
     }
 
+    .hidden { display: none !important; }
+
     @media (max-width: 768px) {
       h1 { font-size: 1.8rem; }
       .cards { grid-template-columns: 1fr; }
+      .mode-selector { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -306,88 +405,206 @@
       <p class="subtitle">Guia de Configuracao para IDEs e Clientes MCP</p>
     </header>
 
-    <section class="server-info">
-      <h2>Iniciar o Servidor</h2>
-      <p>Primeiro, inicie o servidor MCP. Ele ficara rodando e esperando conexoes:</p>
+    <!-- Modo de Operacao -->
+    <section class="section">
+      <h2><span class="num">1</span> Escolha o Modo de Operacao</h2>
+
+      <div class="mode-selector">
+        <div class="mode-card active" onclick="selectMode('headless')">
+          <h3><span class="icon">🖥️</span> Headless <span class="badge">Recomendado</span></h3>
+          <p>Chrome roda em memoria, sem interface grafica. Ideal para automacao e servidores.</p>
+          <ul class="features">
+            <li>Mais rapido e leve</li>
+            <li>Roda em servidores sem display</li>
+            <li>Multiplas abas (handles)</li>
+            <li>Um comando para iniciar tudo</li>
+          </ul>
+        </div>
+
+        <div class="mode-card" onclick="selectMode('gui')">
+          <h3><span class="icon">🌐</span> Com Interface</h3>
+          <p>Chrome normal com janela visivel. Util para debug e desenvolvimento.</p>
+          <ul class="features">
+            <li>Ve o que esta acontecendo</li>
+            <li>Bom para debug</li>
+            <li>Multiplas abas (handles)</li>
+            <li>Requer display grafico</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Headless Mode -->
+    <section class="section" id="headless-section">
+      <h2><span class="num">2</span> Iniciar em Modo Headless</h2>
+
+      <p>Execute um unico comando para iniciar o Chrome headless + servidor MCP:</p>
 
       <div class="command-box">
         <button class="copy-btn" onclick="copyCode(this)">Copiar</button>
         <code>
-          <span class="comment"># Entre na pasta do servidor</span><br>
-          cd mcp-server<br><br>
-          <span class="comment"># Inicie o servidor</span><br>
-          npm start
+          <span class="comment"># Na raiz do projeto</span><br>
+          ./start-headless.sh
         </code>
       </div>
 
-      <p style="margin-top: 15px;">O servidor vai iniciar em:</p>
-      <ul style="margin: 10px 0 0 20px;">
-        <li><strong>HTTP/SSE:</strong> <code style="color: #7ee787;">http://localhost:8080</code> (para clientes MCP)</li>
-        <li><strong>WebSocket:</strong> <code style="color: #7ee787;">ws://localhost:3002</code> (para a extensao do browser)</li>
+      <p style="margin-top: 15px;">O script vai:</p>
+      <ul style="margin: 10px 0 0 20px; color: #888;">
+        <li>Iniciar o servidor MCP na porta <code style="color: #7ee787;">8080</code></li>
+        <li>Iniciar o Chrome headless com a extensao carregada</li>
+        <li>Conectar tudo automaticamente</li>
       </ul>
 
-      <div class="endpoints">
-        <h3 style="color: #fff; margin-bottom: 10px;">Endpoints Disponiveis</h3>
-        <table class="endpoint-table">
-          <thead>
-            <tr>
-              <th>Endpoint</th>
-              <th>Metodo</th>
-              <th>Descricao</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>/sse</code></td>
-              <td><span class="method get">GET</span></td>
-              <td>Conexao SSE para clientes MCP</td>
-            </tr>
-            <tr>
-              <td><code>/messages</code></td>
-              <td><span class="method post">POST</span></td>
-              <td>Envio de mensagens</td>
-            </tr>
-            <tr>
-              <td><code>/health</code></td>
-              <td><span class="method get">GET</span></td>
-              <td>Health check do servidor</td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="note" style="margin-top: 20px;">
+        <div class="note-title">Requisitos</div>
+        Google Chrome ou Chromium instalado no sistema.
       </div>
     </section>
 
-    <h2 style="color: #fff; margin-bottom: 10px; display: flex; align-items: center; gap: 10px;">
-      <span style="background: #00d4ff; color: #1a1a2e; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; font-weight: bold;">2</span>
-      Configurar seu Cliente MCP
-    </h2>
+    <!-- GUI Mode -->
+    <section class="section hidden" id="gui-section">
+      <h2><span class="num">2</span> Iniciar com Interface Grafica</h2>
 
-    <div class="cards">
-      <!-- Claude Code CLI -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-icon claude">C</div>
-          <div>
-            <h3>Claude Code (CLI)</h3>
-            <span class="card-subtitle">Terminal / Command Line</span>
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <strong>Inicie o servidor MCP:</strong>
+          <div class="command-box">
+            <button class="copy-btn" onclick="copyCode(this)">Copiar</button>
+            <code>cd mcp-server && npm start</code>
           </div>
         </div>
+      </div>
 
-        <div class="steps">
-          <div class="step">
-            <div class="step-number">1</div>
-            <div class="step-content">
-              Abra o arquivo de configuracao:
-              <div class="file-path">~/.claude/claude_desktop_config.json</div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <strong>Carregue a extensao no Chrome:</strong>
+          <ol style="margin: 10px 0 0 20px; color: #888;">
+            <li>Abra <code style="color: #7ee787;">chrome://extensions</code></li>
+            <li>Ative "Modo do desenvolvedor"</li>
+            <li>Clique em "Carregar sem compactacao"</li>
+            <li>Selecione a pasta <code style="color: #7ee787;">browser-extension</code></li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <strong>Verifique a conexao:</strong>
+          <p style="color: #888;">O icone da extensao deve mostrar "Conectado"</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Endpoints -->
+    <section class="section">
+      <h2><span class="num">3</span> Endpoints Disponiveis</h2>
+
+      <table class="endpoint-table">
+        <thead>
+          <tr>
+            <th>Endpoint</th>
+            <th>Metodo</th>
+            <th>Descricao</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/sse</code></td>
+            <td><span class="method get">GET</span></td>
+            <td>Conexao SSE para clientes MCP</td>
+          </tr>
+          <tr>
+            <td><code>/messages</code></td>
+            <td><span class="method post">POST</span></td>
+            <td>Envio de mensagens</td>
+          </tr>
+          <tr>
+            <td><code>/health</code></td>
+            <td><span class="method get">GET</span></td>
+            <td>Health check do servidor</td>
+          </tr>
+          <tr>
+            <td><code>/</code></td>
+            <td><span class="method get">GET</span></td>
+            <td>Informacoes do servidor</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Tools de Tabs -->
+    <section class="section">
+      <h2><span class="num">4</span> Ferramentas de Tabs (Handles) <span class="new-badge">NOVO</span></h2>
+
+      <p>Agora voce pode gerenciar multiplas abas na mesma sessao:</p>
+
+      <div class="tools-grid">
+        <div class="tool-item">
+          <code>open_new_tab</code>
+          <p>Abre nova aba com URL opcional</p>
+        </div>
+        <div class="tool-item">
+          <code>get_tab_handles</code>
+          <p>Lista todas as abas abertas</p>
+        </div>
+        <div class="tool-item">
+          <code>switch_to_tab</code>
+          <p>Muda para uma aba especifica</p>
+        </div>
+        <div class="tool-item">
+          <code>close_tab</code>
+          <p>Fecha uma aba especifica</p>
+        </div>
+        <div class="tool-item">
+          <code>get_current_tab</code>
+          <p>Retorna a aba ativa</p>
+        </div>
+      </div>
+
+      <div class="config-file" style="margin-top: 20px;">
+<pre style="color: #e4e4e4;"><span class="comment">// Exemplo de uso</span>
+1. create_automation_session  <span class="comment">// Cria sessao</span>
+2. navigate_to "google.com"   <span class="comment">// Navega</span>
+3. open_new_tab "github.com"  <span class="comment">// Abre 2a aba</span>
+4. get_tab_handles            <span class="comment">// Lista: [tab1, tab2]</span>
+5. switch_to_tab tab1         <span class="comment">// Volta pro Google</span>
+6. close_tab tab2             <span class="comment">// Fecha GitHub</span></pre>
+      </div>
+    </section>
+
+    <!-- Configurar IDE -->
+    <section class="section">
+      <h2><span class="num">5</span> Configurar seu Cliente MCP</h2>
+
+      <div class="cards">
+        <!-- Claude Code CLI -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-icon claude">C</div>
+            <div>
+              <h3>Claude Code (CLI)</h3>
+              <span class="card-subtitle">Terminal / Command Line</span>
             </div>
           </div>
 
-          <div class="step">
-            <div class="step-number">2</div>
-            <div class="step-content">
-              Adicione a configuracao:
-              <div class="config-file">
-                <button class="copy-btn" onclick="copyConfig(this)">Copiar</button>
+          <div class="steps">
+            <div class="step">
+              <div class="step-number">1</div>
+              <div class="step-content">
+                Edite o arquivo:
+                <div class="file-path">~/.claude/claude_desktop_config.json</div>
+              </div>
+            </div>
+
+            <div class="step">
+              <div class="step-number">2</div>
+              <div class="step-content">
+                Adicione:
+                <div class="config-file">
+                  <button class="copy-btn" onclick="copyConfig(this)">Copiar</button>
 <pre><span class="bracket">{</span>
   <span class="key">"mcpServers"</span>: <span class="bracket">{</span>
     <span class="key">"universal-browser"</span>: <span class="bracket">{</span>
@@ -395,158 +612,110 @@
     <span class="bracket">}</span>
   <span class="bracket">}</span>
 <span class="bracket">}</span></pre>
+                </div>
               </div>
             </div>
           </div>
-
-          <div class="step">
-            <div class="step-number">3</div>
-            <div class="step-content">
-              Reinicie o Claude Code
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- VS Code -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-icon vscode">VS</div>
-          <div>
-            <h3>VS Code</h3>
-            <span class="card-subtitle">Claude Extension / Copilot</span>
-          </div>
         </div>
 
-        <div class="steps">
-          <div class="step">
-            <div class="step-number">1</div>
-            <div class="step-content">
-              Abra <strong>Settings</strong> (Ctrl+,)
+        <!-- VS Code -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-icon vscode">VS</div>
+            <div>
+              <h3>VS Code</h3>
+              <span class="card-subtitle">Claude Extension</span>
             </div>
           </div>
 
-          <div class="step">
-            <div class="step-number">2</div>
-            <div class="step-content">
-              Busque por <strong>"MCP"</strong> ou <strong>"Claude MCP"</strong>
+          <div class="steps">
+            <div class="step">
+              <div class="step-number">1</div>
+              <div class="step-content">
+                Abra <strong>Settings</strong> (Ctrl+,)
+              </div>
             </div>
-          </div>
 
-          <div class="step">
-            <div class="step-number">3</div>
-            <div class="step-content">
-              Em <strong>settings.json</strong>, adicione:
-              <div class="config-file">
-                <button class="copy-btn" onclick="copyConfig(this)">Copiar</button>
+            <div class="step">
+              <div class="step-number">2</div>
+              <div class="step-content">
+                Em <strong>settings.json</strong>:
+                <div class="config-file">
+                  <button class="copy-btn" onclick="copyConfig(this)">Copiar</button>
 <pre><span class="key">"claude.mcpServers"</span>: <span class="bracket">{</span>
   <span class="key">"universal-browser"</span>: <span class="bracket">{</span>
     <span class="key">"url"</span>: <span class="string">"http://localhost:8080/sse"</span>
   <span class="bracket">}</span>
 <span class="bracket">}</span></pre>
+                </div>
               </div>
             </div>
           </div>
-
-          <div class="note">
-            <div class="note-title">Alternativa</div>
-            Ou edite diretamente:<br>
-            <span class="file-path">~/.vscode/settings.json</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Cursor -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-icon cursor">Cu</div>
-          <div>
-            <h3>Cursor</h3>
-            <span class="card-subtitle">AI Code Editor</span>
-          </div>
         </div>
 
-        <div class="steps">
-          <div class="step">
-            <div class="step-number">1</div>
-            <div class="step-content">
-              Abra <strong>Cursor Settings</strong> (Ctrl+Shift+J)
+        <!-- Cursor -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-icon cursor">Cu</div>
+            <div>
+              <h3>Cursor</h3>
+              <span class="card-subtitle">AI Code Editor</span>
             </div>
           </div>
 
-          <div class="step">
-            <div class="step-number">2</div>
-            <div class="step-content">
-              Va em <strong>Features</strong> &rarr; <strong>MCP Servers</strong>
+          <div class="steps">
+            <div class="step">
+              <div class="step-number">1</div>
+              <div class="step-content">
+                Abra <strong>Cursor Settings</strong> (Ctrl+Shift+J)
+              </div>
             </div>
-          </div>
 
-          <div class="step">
-            <div class="step-number">3</div>
-            <div class="step-content">
-              Clique em <strong>"Add New MCP Server"</strong>
-            </div>
-          </div>
-
-          <div class="step">
-            <div class="step-number">4</div>
-            <div class="step-content">
-              Configure:
-              <div class="config-file">
-                <button class="copy-btn" onclick="copyConfig(this)">Copiar</button>
-<pre><span class="key">"universal-browser"</span>: <span class="bracket">{</span>
-  <span class="key">"url"</span>: <span class="string">"http://localhost:8080/sse"</span>
+            <div class="step">
+              <div class="step-number">2</div>
+              <div class="step-content">
+                <strong>Features</strong> &rarr; <strong>MCP Servers</strong>
+                <div class="file-path">~/.cursor/mcp.json</div>
+                <div class="config-file">
+                  <button class="copy-btn" onclick="copyConfig(this)">Copiar</button>
+<pre><span class="bracket">{</span>
+  <span class="key">"mcpServers"</span>: <span class="bracket">{</span>
+    <span class="key">"universal-browser"</span>: <span class="bracket">{</span>
+      <span class="key">"url"</span>: <span class="string">"http://localhost:8080/sse"</span>
+    <span class="bracket">}</span>
+  <span class="bracket">}</span>
 <span class="bracket">}</span></pre>
+                </div>
               </div>
             </div>
           </div>
-
-          <div class="note">
-            <div class="note-title">Arquivo de config</div>
-            <span class="file-path">~/.cursor/mcp.json</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Windsurf -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-icon windsurf">W</div>
-          <div>
-            <h3>Windsurf</h3>
-            <span class="card-subtitle">Codeium IDE</span>
-          </div>
         </div>
 
-        <div class="steps">
-          <div class="step">
-            <div class="step-number">1</div>
-            <div class="step-content">
-              Abra <strong>Windsurf Settings</strong>
+        <!-- Windsurf -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-icon windsurf">W</div>
+            <div>
+              <h3>Windsurf</h3>
+              <span class="card-subtitle">Codeium IDE</span>
             </div>
           </div>
 
-          <div class="step">
-            <div class="step-number">2</div>
-            <div class="step-content">
-              Va em <strong>Cascade</strong> &rarr; <strong>MCP Servers</strong>
+          <div class="steps">
+            <div class="step">
+              <div class="step-number">1</div>
+              <div class="step-content">
+                Edite o arquivo:
+                <div class="file-path">~/.codeium/windsurf/mcp_config.json</div>
+              </div>
             </div>
-          </div>
 
-          <div class="step">
-            <div class="step-number">3</div>
-            <div class="step-content">
-              Clique em <strong>"Add Server"</strong> ou edite:
-              <div class="file-path">~/.codeium/windsurf/mcp_config.json</div>
-            </div>
-          </div>
-
-          <div class="step">
-            <div class="step-number">4</div>
-            <div class="step-content">
-              Adicione a configuracao:
-              <div class="config-file">
-                <button class="copy-btn" onclick="copyConfig(this)">Copiar</button>
+            <div class="step">
+              <div class="step-number">2</div>
+              <div class="step-content">
+                Adicione:
+                <div class="config-file">
+                  <button class="copy-btn" onclick="copyConfig(this)">Copiar</button>
 <pre><span class="bracket">{</span>
   <span class="key">"mcpServers"</span>: <span class="bracket">{</span>
     <span class="key">"universal-browser"</span>: <span class="bracket">{</span>
@@ -554,49 +723,44 @@
     <span class="bracket">}</span>
   <span class="bracket">}</span>
 <span class="bracket">}</span></pre>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <section class="server-info" style="margin-top: 40px;">
-      <h2 style="color: #10b981;">
-        <span style="background: #10b981; color: #1a1a2e; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.9rem; font-weight: bold;">3</span>
-        Testar a Conexao
-      </h2>
-
-      <p>Apos configurar, teste se esta funcionando:</p>
+    <!-- Testar -->
+    <section class="section">
+      <h2 style="color: #10b981;"><span class="num" style="background: #10b981;">6</span> Testar a Conexao</h2>
 
       <div class="command-box">
         <button class="copy-btn" onclick="copyCode(this)">Copiar</button>
-        <code>
-          <span class="comment"># Verificar se o servidor esta rodando</span><br>
-          curl http://localhost:8080/health
-        </code>
+        <code>curl http://localhost:8080/health</code>
       </div>
 
-      <p style="margin-top: 20px;">No seu IDE/CLI, peca ao Claude para:</p>
+      <p style="margin-top: 20px;">No seu IDE, peca ao Claude:</p>
       <div class="config-file" style="background: rgba(16, 185, 129, 0.1); border-color: #10b981;">
-<pre style="color: #10b981;">"Crie uma sessao de automacao e navegue para google.com"</pre>
-      </div>
-
-      <div class="note" style="margin-top: 20px;">
-        <div class="note-title">Importante</div>
-        Certifique-se de que a <strong>extensao do browser</strong> esta instalada e conectada ao servidor WebSocket na porta 3002.
+<pre style="color: #10b981;">"Crie uma sessao de automacao, navegue para google.com,
+abra uma nova aba com github.com, e liste as abas abertas"</pre>
       </div>
     </section>
 
     <footer>
       <p>Universal Browser MCP &copy; 2024</p>
-      <p style="margin-top: 10px;">
-        <a href="https://github.com/anthropics/anthropic-cookbook/tree/main/misc/model_context_protocol">Documentacao MCP</a>
-      </p>
     </footer>
   </div>
 
   <script>
+    function selectMode(mode) {
+      document.querySelectorAll('.mode-card').forEach(c => c.classList.remove('active'));
+      event.currentTarget.classList.add('active');
+
+      document.getElementById('headless-section').classList.toggle('hidden', mode !== 'headless');
+      document.getElementById('gui-section').classList.toggle('hidden', mode !== 'gui');
+    }
+
     function copyCode(btn) {
       const codeBlock = btn.parentElement.querySelector('code');
       const text = codeBlock.innerText;
