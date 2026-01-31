@@ -25,6 +25,7 @@ interface PendingRequest {
   reject: (error: Error) => void;
   timeout: NodeJS.Timeout;
   sessionId: string;
+  mcpInstanceId: string; // Track which MCP instance made the request
 }
 
 interface SessionClient {
@@ -54,6 +55,15 @@ export class BridgeServer {
   private mcpClients: Map<string, WebSocket> = new Map(); // mcpInstanceId -> WebSocket (quando é servidor)
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 10;
+
+  // Cleanup and limits for pending requests
+  private cleanupInterval: NodeJS.Timeout | null = null;
+  private pingInterval: NodeJS.Timeout | null = null;
+  private readonly MAX_PENDING_REQUESTS = 50;
+  private readonly STALE_REQUEST_TIMEOUT = 60000; // 1 minute (was 2 minutes)
+  private readonly PING_INTERVAL = 10000; // 10 seconds (was 15)
+  private readonly PONG_TIMEOUT = 5000; // 5 seconds to receive pong (was 10)
+  private readonly DEFAULT_COMMAND_TIMEOUT = 15000; // 15 seconds default for background commands
 
   constructor(port: number = 3002, instanceId?: string) {
     this.port = port;
@@ -94,16 +104,19 @@ export class BridgeServer {
     const requestId = `bg_${++this.requestCounter}_${Date.now()}`;
 
     return new Promise((resolve, reject) => {
+      this.checkPendingRequestLimit();
+
       const timeoutHandle = setTimeout(() => {
         this.pendingRequests.delete(requestId);
-        reject(new Error('Timeout waiting for background to create session'));
-      }, 15000);
+        reject(new Error('Timeout waiting for background to create session. Is the Chrome extension running?'));
+      }, 10000); // 10 seconds for session creation - should be fast
 
       this.pendingRequests.set(requestId, {
         resolve,
         reject,
         timeout: timeoutHandle,
-        sessionId: '__background__'
+        sessionId: '__background__',
+        mcpInstanceId: this.mcpInstanceId
       });
 
       const message = JSON.stringify({
@@ -137,20 +150,24 @@ export class BridgeServer {
   /**
    * Envia comando genérico para o background
    */
-  async sendCommandToBackground(commandType: string, data?: unknown): Promise<unknown> {
+  async sendCommandToBackground(commandType: string, data?: unknown, timeout?: number): Promise<unknown> {
     const requestId = `bg_${++this.requestCounter}_${Date.now()}`;
+    const effectiveTimeout = timeout || this.DEFAULT_COMMAND_TIMEOUT;
 
     return new Promise((resolve, reject) => {
+      this.checkPendingRequestLimit();
+
       const timeoutHandle = setTimeout(() => {
         this.pendingRequests.delete(requestId);
-        reject(new Error(`Timeout waiting for background command: ${commandType}`));
-      }, 30000);
+        reject(new Error(`Timeout (${effectiveTimeout}ms) waiting for background command: ${commandType}`));
+      }, effectiveTimeout);
 
       this.pendingRequests.set(requestId, {
         resolve,
         reject,
         timeout: timeoutHandle,
-        sessionId: '__background__'
+        sessionId: '__background__',
+        mcpInstanceId: this.mcpInstanceId
       });
 
       const message = JSON.stringify({
@@ -196,6 +213,146 @@ export class BridgeServer {
     return this.currentSessionId;
   }
 
+  /**
+   * Starts periodic cleanup of stale pending requests
+   */
+  private startCleanupInterval(): void {
+    if (this.cleanupInterval) return;
+
+    this.cleanupInterval = setInterval(() => {
+      const now = Date.now();
+      let cleaned = 0;
+
+      for (const [requestId, pending] of this.pendingRequests) {
+        // Extract timestamp from requestId (format: bg_X_TIMESTAMP or req_X_TIMESTAMP)
+        const parts = requestId.split('_');
+        const timestamp = parseInt(parts[parts.length - 1], 10);
+
+        if (!isNaN(timestamp) && now - timestamp > this.STALE_REQUEST_TIMEOUT) {
+          clearTimeout(pending.timeout);
+          pending.reject(new Error(`Request ${requestId} cleaned up due to staleness (${Math.round((now - timestamp) / 1000)}s old)`));
+          this.pendingRequests.delete(requestId);
+          cleaned++;
+        }
+      }
+
+      if (cleaned > 0) {
+        console.error(`[Bridge] Cleaned up ${cleaned} stale pending requests`);
+      }
+
+      // Log pending requests count for debugging
+      if (this.pendingRequests.size > 5) {
+        console.error(`[Bridge] Warning: ${this.pendingRequests.size} pending requests`);
+      }
+    }, 15000); // Run every 15 seconds (was 30)
+  }
+
+  /**
+   * Starts periodic ping to detect dead connections
+   */
+  private startPingInterval(): void {
+    if (this.pingInterval || !this.isServerMode) return;
+
+    this.pingInterval = setInterval(() => {
+      const now = Date.now();
+      const deadConnections: WebSocket[] = [];
+
+      for (const [ws, client] of this.clients) {
+        if (ws.readyState !== WebSocket.OPEN) {
+          deadConnections.push(ws);
+          continue;
+        }
+
+        // Send ping
+        try {
+          ws.ping();
+        } catch (err) {
+          console.error(`[Bridge] Ping failed for ${client.sessionId}:`, err);
+          deadConnections.push(ws);
+        }
+      }
+
+      // Clean up dead connections
+      for (const ws of deadConnections) {
+        const client = this.clients.get(ws);
+        if (client) {
+          console.error(`[Bridge] Removing dead connection: ${client.sessionId}`);
+          if (client.isBackground) {
+            this.backgroundClient = null;
+            this.cleanupPendingRequestsForSession('__background__');
+          } else if (client.isMcpClient && client.mcpInstanceId) {
+            this.mcpClients.delete(client.mcpInstanceId);
+            this.cleanupPendingRequestsForSession(client.sessionId, client.mcpInstanceId);
+          } else {
+            this.sessionClients.delete(client.sessionId);
+            this.cleanupPendingRequestsForSession(client.sessionId);
+          }
+          this.clients.delete(ws);
+        }
+        try {
+          ws.terminate();
+        } catch {}
+      }
+    }, this.PING_INTERVAL);
+  }
+
+  /**
+   * Cleanup pending requests for a disconnected session or client
+   * This is CRITICAL to prevent hanging requests when browser disconnects
+   */
+  private cleanupPendingRequestsForSession(sessionId: string, mcpInstanceId?: string): void {
+    let cleaned = 0;
+
+    for (const [requestId, pending] of this.pendingRequests) {
+      const shouldClean = pending.sessionId === sessionId ||
+        (mcpInstanceId && pending.mcpInstanceId === mcpInstanceId);
+
+      if (shouldClean) {
+        clearTimeout(pending.timeout);
+        const errorMsg = sessionId === '__background__'
+          ? 'Background extension disconnected. Ensure the Chrome extension is running.'
+          : `Browser session disconnected. The page may have navigated or closed.`;
+        pending.reject(new Error(errorMsg));
+        this.pendingRequests.delete(requestId);
+        cleaned++;
+      }
+    }
+
+    if (cleaned > 0) {
+      console.error(`[Bridge] Cleaned up ${cleaned} pending requests for session ${sessionId}`);
+    }
+  }
+
+  /**
+   * Check if we can accept new pending requests
+   */
+  private checkPendingRequestLimit(): void {
+    if (this.pendingRequests.size >= this.MAX_PENDING_REQUESTS) {
+      // Find and reject oldest request
+      let oldestId: string | null = null;
+      let oldestTime = Infinity;
+
+      for (const [requestId] of this.pendingRequests) {
+        const parts = requestId.split('_');
+        const timestamp = parseInt(parts[parts.length - 1], 10);
+        if (!isNaN(timestamp) && timestamp < oldestTime) {
+          oldestTime = timestamp;
+          oldestId = requestId;
+        }
+      }
+
+      if (oldestId) {
+        const pending = this.pendingRequests.get(oldestId);
+        if (pending) {
+          clearTimeout(pending.timeout);
+          pending.reject(new Error('Request evicted due to queue limit'));
+          this.pendingRequests.delete(oldestId);
+          console.error(`[Bridge] Evicted oldest pending request due to limit`);
+        }
+      }
+    }
+  }
+
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
@@ -203,6 +360,8 @@ export class BridgeServer {
 
         this.wss.on('listening', () => {
           this.isServerMode = true;
+          this.startCleanupInterval();
+          this.startPingInterval();
           console.error(`[Bridge] WebSocket server running on port ${this.port} (instance: ${this.mcpInstanceId})`);
           resolve();
         });
@@ -226,11 +385,17 @@ export class BridgeServer {
               if (client.isBackground) {
                 this.backgroundClient = null;
                 console.error('[Bridge] Background controller disconnected');
+                // Cleanup pending requests waiting for background
+                this.cleanupPendingRequestsForSession('__background__');
               } else if (client.isMcpClient && client.mcpInstanceId) {
                 this.mcpClients.delete(client.mcpInstanceId);
                 console.error(`[Bridge] MCP client disconnected: ${client.mcpInstanceId}`);
+                // Cleanup pending requests for this MCP client
+                this.cleanupPendingRequestsForSession(client.sessionId, client.mcpInstanceId);
               } else {
                 this.sessionClients.delete(client.sessionId);
+                // Cleanup pending requests for this session
+                this.cleanupPendingRequestsForSession(client.sessionId);
               }
               this.clients.delete(ws);
             }
@@ -287,6 +452,7 @@ export class BridgeServer {
         this.clientWs.on('open', () => {
           console.error(`[Bridge] Connected as client (instance: ${this.mcpInstanceId})`);
           this.reconnectAttempts = 0;
+          this.startCleanupInterval();
 
           // Registra esta instância MCP no servidor
           this.clientWs!.send(JSON.stringify({
@@ -467,16 +633,26 @@ export class BridgeServer {
 
     // Resposta a um request pendente
     if (type === 'response' && requestId) {
-      // Se a resposta tem mcpInstanceId, roteia para o cliente correto
-      if (mcpInstanceId && mcpInstanceId !== this.mcpInstanceId) {
-        const targetMcp = this.mcpClients.get(mcpInstanceId);
+      // First check if we have a pending request to determine the target
+      const pending = this.pendingRequests.get(requestId);
+
+      // Determine target mcpInstanceId: use from response, or from pending request
+      const targetInstanceId = mcpInstanceId || pending?.mcpInstanceId;
+
+      // If the target is a different MCP client, route to them
+      if (targetInstanceId && targetInstanceId !== this.mcpInstanceId) {
+        const targetMcp = this.mcpClients.get(targetInstanceId);
         if (targetMcp && targetMcp.readyState === WebSocket.OPEN) {
-          targetMcp.send(JSON.stringify(message));
+          // Ensure mcpInstanceId is in the message for the client
+          const routedMessage = { ...message, mcpInstanceId: targetInstanceId };
+          targetMcp.send(JSON.stringify(routedMessage));
+        } else {
+          console.error(`[Bridge] Cannot route response to ${targetInstanceId}: client not connected`);
         }
         return;
       }
 
-      const pending = this.pendingRequests.get(requestId);
+      // Process locally if the request was made by this server
       if (pending) {
         clearTimeout(pending.timeout);
         this.pendingRequests.delete(requestId);
@@ -548,8 +724,9 @@ export class BridgeServer {
 
   /**
    * Envia mensagem e aguarda resposta - PARA A SESSÃO ATUAL
+   * Default timeout reduced to 20s for faster feedback
    */
-  async sendAndWait(message: BridgeMessage, timeout: number = 30000): Promise<unknown> {
+  async sendAndWait(message: BridgeMessage, timeout: number = 10000): Promise<unknown> {
     if (!this.currentSessionId) {
       throw new Error('No session active. Call create_automation_session first.');
     }
@@ -559,55 +736,75 @@ export class BridgeServer {
 
   /**
    * Envia mensagem para uma sessão específica e aguarda resposta
+   * Timeout reduzido para feedback mais rápido
    */
-  async sendAndWaitToSession(sessionId: string, message: BridgeMessage, timeout: number = 30000): Promise<unknown> {
+  async sendAndWaitToSession(sessionId: string, message: BridgeMessage, timeout: number = 10000): Promise<unknown> {
     const requestId = `req_${++this.requestCounter}_${Date.now()}`;
     message.requestId = requestId;
     message.sessionId = sessionId;
     message.mcpInstanceId = this.mcpInstanceId;
 
     return new Promise((resolve, reject) => {
+      this.checkPendingRequestLimit();
+
+      let ws: WebSocket | null = null;
+
+      // Verifica conexão antes de criar o request
+      if (this.isServerMode) {
+        ws = this.sessionClients.get(sessionId) || null;
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          reject(new Error(`No browser connected for session: ${sessionId}. The page may have navigated - use wait_for_element or page_ready first.`));
+          return;
+        }
+      } else {
+        ws = this.clientWs;
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          reject(new Error('Not connected to bridge server.'));
+          return;
+        }
+      }
+
       const timeoutHandle = setTimeout(() => {
-        this.pendingRequests.delete(requestId);
-        reject(new Error(`Request timeout after ${timeout}ms`));
+        const pending = this.pendingRequests.get(requestId);
+        if (pending) {
+          this.pendingRequests.delete(requestId);
+          // Check if connection is still valid
+          const currentWs = this.isServerMode ? this.sessionClients.get(sessionId) : this.clientWs;
+          const isStillConnected = currentWs && currentWs.readyState === WebSocket.OPEN;
+
+          const errorMsg = isStillConnected
+            ? `Timeout after ${Math.round(timeout/1000)}s for ${message.type}. The operation may still be in progress.`
+            : `Timeout after ${Math.round(timeout/1000)}s for ${message.type}. Browser connection lost - page may have navigated.`;
+
+          reject(new Error(errorMsg));
+        }
       }, timeout);
 
       this.pendingRequests.set(requestId, {
         resolve,
         reject,
         timeout: timeoutHandle,
-        sessionId
+        sessionId,
+        mcpInstanceId: this.mcpInstanceId
       });
 
-      if (this.isServerMode) {
-        // Modo servidor: envia direto para o content-script da sessão
-        const ws = this.sessionClients.get(sessionId);
-
-        if (!ws || ws.readyState !== WebSocket.OPEN) {
-          this.pendingRequests.delete(requestId);
-          clearTimeout(timeoutHandle);
-          reject(new Error(`No browser connected for session: ${sessionId}. Make sure the automation window is open.`));
-          return;
+      try {
+        if (this.isServerMode) {
+          ws!.send(JSON.stringify(message));
+        } else {
+          // Modo cliente: envia via servidor
+          const routeMessage = {
+            ...message,
+            originalType: message.type,
+            type: 'route_to_session'
+          };
+          ws!.send(JSON.stringify(routeMessage));
         }
-
-        ws.send(JSON.stringify(message));
-      } else {
-        // Modo cliente: envia via servidor
-        if (!this.clientWs || this.clientWs.readyState !== WebSocket.OPEN) {
-          this.pendingRequests.delete(requestId);
-          clearTimeout(timeoutHandle);
-          reject(new Error('Not connected to bridge server.'));
-          return;
-        }
-
-        // Envia para o servidor que irá rotear para a sessão correta
-        // Preserva o tipo original da mensagem
-        const routeMessage = {
-          ...message,
-          originalType: message.type,
-          type: 'route_to_session'
-        };
-        this.clientWs.send(JSON.stringify(routeMessage));
+      } catch (sendError) {
+        // Se falhar ao enviar, limpa o request pendente
+        this.pendingRequests.delete(requestId);
+        clearTimeout(timeoutHandle);
+        reject(new Error(`Failed to send message: ${(sendError as Error).message}`));
       }
     });
   }
@@ -717,6 +914,18 @@ export class BridgeServer {
   }
 
   stop(): void {
+    // Stop cleanup interval
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+
+    // Stop ping interval
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+
     // Limpa requests pendentes
     for (const [, pending] of this.pendingRequests) {
       clearTimeout(pending.timeout);

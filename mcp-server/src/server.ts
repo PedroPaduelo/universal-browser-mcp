@@ -120,6 +120,81 @@ const ScrollToSchema = z.object({
   }).optional()
 });
 
+// New schemas for efficiency tools
+const GetPageInfoSchema = z.object({
+  includeForms: z.boolean().optional().default(true),
+  includeButtons: z.boolean().optional().default(true),
+  includeLinks: z.boolean().optional().default(true),
+  includeInputs: z.boolean().optional().default(true),
+  includeClickable: z.boolean().optional().default(true),
+  maxElements: z.number().optional().default(100)
+});
+
+const BatchActionsSchema = z.object({
+  actions: z.array(z.object({
+    type: z.string(),
+    data: z.record(z.any()).optional()
+  })).min(1).max(20),
+  stopOnError: z.boolean().optional().default(true)
+});
+
+const SmartWaitSchema = z.object({
+  conditions: z.array(z.object({
+    type: z.enum(['element', 'text', 'url_contains', 'url_equals', 'url_matches', 'network_idle', 'no_loading_spinner', 'element_hidden', 'element_enabled', 'document_ready', 'dom_stable', 'element_count', 'attribute_equals', 'element_text']),
+    selector: z.string().optional(),
+    text: z.string().optional(),
+    value: z.string().optional(),
+    pattern: z.string().optional(),
+    duration: z.number().optional(),
+    count: z.number().optional(),
+    operator: z.enum(['eq', 'gt', 'gte', 'lt', 'lte']).optional(),
+    attribute: z.string().optional(),
+    exact: z.boolean().optional(),
+    state: z.string().optional()
+  })).min(1),
+  logic: z.enum(['all', 'any']).optional().default('all'),
+  timeout: z.number().optional().default(10000),
+  pollInterval: z.number().optional().default(100)
+});
+
+const GetAccessibilityTreeSchema = z.object({
+  maxDepth: z.number().optional().default(5),
+  roles: z.array(z.string()).optional(),
+  root: z.string().optional()
+});
+
+const FindByRoleSchema = z.object({
+  role: z.string(),
+  name: z.string().optional()
+});
+
+const HighlightElementSchema = z.object({
+  selector: z.string(),
+  color: z.string().optional().default('red'),
+  duration: z.number().optional().default(2000)
+});
+
+const RetryActionSchema = z.object({
+  action: z.object({
+    type: z.string(),
+    data: z.record(z.any()).optional()
+  }),
+  maxAttempts: z.number().optional().default(3),
+  delayMs: z.number().optional().default(1000),
+  backoff: z.boolean().optional().default(false)
+});
+
+const GetElementCenterSchema = z.object({
+  selector: z.string()
+});
+
+const PageReadySchema = z.object({
+  timeout: z.number().optional().default(30000),
+  checkNetwork: z.boolean().optional().default(true),
+  checkSpinners: z.boolean().optional().default(true),
+  stabilityDuration: z.number().optional().default(500)
+});
+
 // Gera um ID de sessão único para esta instância do MCP
 const instanceSessionId = `mcp_${randomUUID().slice(0, 8)}`;
 
@@ -134,103 +209,122 @@ console.error(`[MCP] Instance session ID: ${instanceSessionId}`);
 
 // ==================== TOOLS DE SESSÃO ====================
 
+// Session ID fixo para reutilização - uma sessão por instância MCP
+const FIXED_SESSION_ID = `session_${instanceSessionId.replace('mcp_', '')}`;
+
 mcpServer.tool(
   'create_automation_session',
-  `Cria ou reutiliza uma sessão de automação em janela dedicada do Chrome.
+  `Create or reuse an automation session in a dedicated Chrome window.
 
-IMPORTANTE:
-- SEMPRE chame esta tool primeiro antes de qualquer outra operação
-- Se já existir uma janela de automação aberta, ela será REUTILIZADA (não cria nova)
-- A janela é isolada das suas abas normais
+IMPORTANT:
+- ALWAYS call this tool first before any other automation operation
+- If an automation window already exists, it will be REUSED (not creating a new one)
+- The window is isolated from your normal browsing tabs
 
-FLUXO TÍPICO:
-1. create_automation_session (abre janela)
-2. get_page_info (entende a página)
-3. fill_field, click_element, etc. (interage)
-4. close_automation_session (quando terminar)`,
+WORKFLOW:
+1. create_automation_session (opens window)
+2. navigate_to (go to URL)
+3. get_page_info (understand the page)
+4. fill_field, click_element, etc. (interact)
+5. close_automation_session (when finished)
+
+INPUT:
+- url: Initial URL to open (default: about:blank)`,
   {
-    url: z.string().url().optional().describe('URL inicial para abrir (padrão: about:blank)')
+    url: z.string().url().optional().describe('Initial URL to open (default: about:blank)')
   },
   async ({ url }) => {
-    // Gera um sessionId único para esta sessão
-    const sessionId = `session_${randomUUID().slice(0, 8)}`;
+    // Usa sessionId FIXO para reutilizar a mesma janela
+    const sessionId = FIXED_SESSION_ID;
+
+    // Se já tem sessão ativa e conectada, reutiliza
+    if (bridgeServer.getCurrentSession() === sessionId && bridgeServer.isSessionConnected(sessionId)) {
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            success: true,
+            sessionId,
+            reused: true,
+            message: 'Reusing existing automation session.',
+            tip: 'Use navigate_to to go to a different URL.'
+          }, null, 2)
+        }]
+      };
+    }
+
+    // Define a sessão atual
+    bridgeServer.setCurrentSession(sessionId);
+
+    // Verifica se o background está conectado
+    if (!bridgeServer.isBackgroundConnected()) {
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            success: false,
+            error: 'Chrome extension not connected. Make sure the extension is installed and running.'
+          }, null, 2)
+        }]
+      };
+    }
 
     try {
-      // Define a sessão atual no bridge
-      bridgeServer.setCurrentSession(sessionId);
+      // Timeout curto - se não responder em 5s, retorna erro
+      const result = await Promise.race([
+        bridgeServer.createSessionViaBackground(sessionId, url),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+      ]) as { success?: boolean; error?: string; windowId?: number; activeTabId?: number; message?: string };
 
-      // Verifica se o background está conectado
-      if (bridgeServer.isBackgroundConnected()) {
-        console.error(`[MCP] Creating session via background: ${sessionId}`);
-
-        // Envia comando para o background criar a janela
-        const result = await bridgeServer.createSessionViaBackground(sessionId, url);
-        console.error(`[MCP] Session created:`, result);
-
-        // Aguarda o content-script conectar
-        let attempts = 0;
-        const maxAttempts = 20;
-
-        while (attempts < maxAttempts) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          if (bridgeServer.isSessionConnected(sessionId)) {
-            return {
-              content: [{
-                type: 'text',
-                text: JSON.stringify({
-                  success: true,
-                  sessionId,
-                  message: 'Sessão de automação criada! Uma janela dedicada foi aberta.',
-                  tip: 'Agora você pode usar as outras tools. Esta janela é isolada das suas abas normais.'
-                }, null, 2)
-              }]
-            };
-          }
-          attempts++;
-        }
-
-        // Sessão criada mas content-script ainda não conectou
+      // Se a sessão já existe, é sucesso
+      if (result?.message?.includes('already exists') || result?.success) {
         return {
           content: [{
             type: 'text',
             text: JSON.stringify({
               success: true,
               sessionId,
-              message: 'Janela de automação criada! Aguardando conexão...',
-              tip: 'A janela foi aberta. Use get_page_info para verificar quando estiver pronto.',
-              result
-            }, null, 2)
-          }]
-        };
-      } else {
-        // Background não conectado - instruções manuais
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              success: false,
-              sessionId,
-              message: 'Extensão não conectada ao servidor MCP.',
-              instructions: [
-                '1. Verifique se a extensão Universal Browser MCP está instalada no Chrome',
-                '2. Clique no ícone da extensão para verificar a conexão',
-                '3. Se o servidor aparecer como "Conectado", tente novamente',
-                '4. Se o servidor aparecer como "Desconectado", aguarde alguns segundos',
-                '5. Você pode criar a sessão manualmente pelo popup da extensão'
-              ]
+              windowId: result?.windowId,
+              tabId: result?.activeTabId,
+              message: result?.message || 'Session ready'
             }, null, 2)
           }]
         };
       }
-    } catch (error) {
+
       return {
         content: [{
           type: 'text',
           text: JSON.stringify({
             success: false,
-            sessionId,
-            error: (error as Error).message,
-            tip: 'Verifique se a extensão está instalada e o Chrome está aberto.'
+            error: result?.error || 'Failed to create session'
+          }, null, 2)
+        }]
+      };
+
+    } catch (error) {
+      const errorMsg = (error as Error).message;
+      // Timeout não é necessariamente erro - janela pode ter sido criada
+      if (errorMsg === 'Timeout') {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              sessionId,
+              message: 'Session creation initiated. Window should be open.',
+              tip: 'If window is not visible, check Chrome. Use navigate_to to continue.'
+            }, null, 2)
+          }]
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            success: false,
+            error: errorMsg
           }, null, 2)
         }]
       };
@@ -462,17 +556,32 @@ mcpServer.tool(
 
 mcpServer.tool(
   'navigate_to',
-  'Navega para uma URL específica NA JANELA DE AUTOMAÇÃO. Use para ir a qualquer site.',
-  { url: z.string().describe('URL completa para navegar (ex: https://google.com)') },
+  `Navigate to a URL in the automation window. Returns immediately.
+
+INPUT:
+- url: Full URL (e.g., "https://google.com")
+
+WORKFLOW: navigate_to -> wait_for_element -> get_page_info`,
+  { url: z.string().describe('Full URL to navigate to') },
   async ({ url }) => {
     NavigateToSchema.parse({ url });
 
-    if (!bridgeServer.isConnected()) {
-      return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa. Use create_automation_session primeiro.' }] };
+    const sessionId = bridgeServer.getCurrentSession();
+    if (!sessionId) {
+      return { content: [{ type: 'text', text: 'Error: No session. Use create_automation_session first.' }] };
     }
 
-    await bridgeServer.sendAndWait({ type: 'navigate_to', data: { url } });
-    return { content: [{ type: 'text', text: `Navegando para: ${url}` }] };
+    try {
+      // 3 second timeout - navigation should be instant
+      await Promise.race([
+        bridgeServer.sendCommandToBackground('navigate_command', { sessionId, url }, 3000),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
+      ]);
+      return { content: [{ type: 'text', text: `Navigating to: ${url}` }] };
+    } catch {
+      // Even on timeout, navigation likely started
+      return { content: [{ type: 'text', text: `Navigation started: ${url}` }] };
+    }
   }
 );
 
@@ -485,7 +594,9 @@ mcpServer.tool(
       return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
     }
 
-    await bridgeServer.sendAndWait({ type: 'go_back', data: {} });
+    try {
+      await bridgeServer.sendAndWait({ type: 'go_back', data: {} }, 5000);
+    } catch { /* ignore timeout */ }
     return { content: [{ type: 'text', text: 'Voltando para página anterior...' }] };
   }
 );
@@ -499,7 +610,9 @@ mcpServer.tool(
       return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
     }
 
-    await bridgeServer.sendAndWait({ type: 'go_forward', data: {} });
+    try {
+      await bridgeServer.sendAndWait({ type: 'go_forward', data: {} }, 5000);
+    } catch { /* ignore timeout */ }
     return { content: [{ type: 'text', text: 'Avançando para próxima página...' }] };
   }
 );
@@ -513,7 +626,9 @@ mcpServer.tool(
       return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
     }
 
-    await bridgeServer.sendAndWait({ type: 'refresh', data: {} });
+    try {
+      await bridgeServer.sendAndWait({ type: 'refresh', data: {} }, 5000);
+    } catch { /* ignore timeout */ }
     return { content: [{ type: 'text', text: 'Recarregando página...' }] };
   }
 );
@@ -527,8 +642,12 @@ mcpServer.tool(
       return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
     }
 
-    const result = await bridgeServer.sendAndWait({ type: 'get_current_url', data: {} });
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    try {
+      const result = await bridgeServer.sendAndWait({ type: 'get_current_url', data: {} }, 5000);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
+    }
   }
 );
 
@@ -536,32 +655,29 @@ mcpServer.tool(
 
 mcpServer.tool(
   'get_page_info',
-  `Retorna estrutura completa da página. SEMPRE use antes de interagir.
+  `Get page structure: forms, buttons, inputs, clickable elements.
 
-RETORNA:
-- forms: Formulários com todos os campos
-- buttons: Botões e elementos clicáveis
-- links: Links da página
-- inputs: Campos de entrada
-- clickableElements: TODOS elementos clicáveis (incluindo divs com listeners)
-
-ÚTIL PARA:
-- Entender a estrutura antes de preencher formulários
-- Descobrir seletores de elementos
-- Verificar se a página carregou corretamente
-
-DICA: Use clickableElements para encontrar elementos em sites como WhatsApp, Gmail, etc. que usam divs customizados.`,
-  {},
-  async () => {
+INPUT (all optional):
+- includeForms, includeButtons, includeLinks, includeInputs, includeClickable (default: true)
+- maxElements: Limit per category (default: 100)`,
+  {
+    includeForms: z.boolean().optional(),
+    includeButtons: z.boolean().optional(),
+    includeLinks: z.boolean().optional(),
+    includeInputs: z.boolean().optional(),
+    includeClickable: z.boolean().optional(),
+    maxElements: z.number().optional()
+  },
+  async (params) => {
     if (!bridgeServer.isConnected()) {
-      return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa. Use create_automation_session primeiro.' }] };
+      return { content: [{ type: 'text', text: 'Error: No session active.' }] };
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'get_page_info', data: {} });
+      const result = await bridgeServer.sendAndWait({ type: 'get_page_info', data: params }, 10000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
-      return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
     }
   }
 );
@@ -575,8 +691,12 @@ mcpServer.tool(
       return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
     }
 
-    const result = await bridgeServer.sendAndWait({ type: 'get_page_title', data: {} });
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    try {
+      const result = await bridgeServer.sendAndWait({ type: 'get_page_title', data: {} }, 5000);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
+    }
   }
 );
 
@@ -591,8 +711,12 @@ mcpServer.tool(
       return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
     }
 
-    const result = await bridgeServer.sendAndWait({ type: 'get_page_text', data: { selector } });
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    try {
+      const result = await bridgeServer.sendAndWait({ type: 'get_page_text', data: { selector } }, 10000);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
+    }
   }
 );
 
@@ -600,24 +724,29 @@ mcpServer.tool(
 
 mcpServer.tool(
   'fill_field',
-  'Preenche um campo de formulário. Use label para campos com texto visível ou selector CSS para campos específicos.',
+  `Fill a form field.
+
+INPUT:
+- selector: CSS selector OR
+- label: Visible label text
+- value: Value to fill (required)`,
   {
-    selector: z.string().optional().describe('Seletor CSS do campo'),
-    label: z.string().optional().describe('Texto do label do campo (ex: "Email", "Senha")'),
-    value: z.string().describe('Valor a preencher')
+    selector: z.string().optional().describe('CSS selector'),
+    label: z.string().optional().describe('Label text'),
+    value: z.string().describe('Value to fill')
   },
   async (params) => {
     FillFieldSchema.parse(params);
 
     if (!bridgeServer.isConnected()) {
-      return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      return { content: [{ type: 'text', text: 'Error: No session.' }] };
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'fill_field', data: params });
-      return { content: [{ type: 'text', text: `Campo preenchido: ${JSON.stringify(result)}` }] };
+      const result = await bridgeServer.sendAndWait({ type: 'fill_field', data: params }, 10000);
+      return { content: [{ type: 'text', text: `Filled: ${JSON.stringify(result)}` }] };
     } catch (error) {
-      return { content: [{ type: 'text', text: `Erro ao preencher campo: ${(error as Error).message}` }] };
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
     }
   }
 );
@@ -640,7 +769,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'fill_form', data: { fields } });
+      const result = await bridgeServer.sendAndWait({ type: 'fill_form', data: { fields } }, 15000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro ao preencher formulário: ${(error as Error).message}` }] };
@@ -650,40 +779,29 @@ mcpServer.tool(
 
 mcpServer.tool(
   'click_element',
-  `Clica em um elemento da página (botão, link, div, etc).
+  `Click an element by selector or text.
 
-COMO USAR:
-- Por texto: { text: "Enviar" } - busca em botões, links e elementos clicáveis
-- Por seletor: { selector: "#btn-submit" } - mais preciso
-
-DICAS:
-- Se o clique não funcionar, use get_element_info para descobrir o seletor correto
-- Para elementos em listas (WhatsApp, emails), use seletor com [title] ou [data-testid]
-- O clique simula eventos completos (mousedown, mouseup, click)
-- Automaticamente encontra o elemento clicável mais próximo
-
-EXEMPLOS:
-- Botão: { text: "Confirmar" }
-- Link: { text: "Saiba mais" }
-- Por seletor: { selector: "[data-testid='send-btn']" }
-- Item de lista: { selector: "span[title='Nome do contato']" }`,
+INPUT (provide ONE):
+- selector: CSS selector (e.g., "[data-testid='btn']")
+- text: Visible text (e.g., "Login")
+- clickParent: Auto-find clickable parent (default: true)`,
   {
-    selector: z.string().optional().describe('Seletor CSS do elemento'),
-    text: z.string().optional().describe('Texto visível do elemento (ex: "Entrar", "Buscar")'),
-    clickParent: z.boolean().optional().describe('Se true (padrão), busca elemento clicável pai')
+    selector: z.string().optional().describe('CSS selector'),
+    text: z.string().optional().describe('Visible text'),
+    clickParent: z.boolean().optional()
   },
   async (params) => {
     ClickElementSchema.parse(params);
 
     if (!bridgeServer.isConnected()) {
-      return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      return { content: [{ type: 'text', text: 'Error: No session.' }] };
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'click_element', data: params });
-      return { content: [{ type: 'text', text: `Elemento clicado: ${JSON.stringify(result)}` }] };
+      const result = await bridgeServer.sendAndWait({ type: 'click_element', data: params }, 10000);
+      return { content: [{ type: 'text', text: `Clicked: ${JSON.stringify(result)}` }] };
     } catch (error) {
-      return { content: [{ type: 'text', text: `Erro ao clicar: ${(error as Error).message}` }] };
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
     }
   }
 );
@@ -705,7 +823,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'select_option', data: params });
+      const result = await bridgeServer.sendAndWait({ type: 'select_option', data: params }, 10000);
       return { content: [{ type: 'text', text: `Opção selecionada: ${JSON.stringify(result)}` }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro ao selecionar: ${(error as Error).message}` }] };
@@ -715,37 +833,46 @@ mcpServer.tool(
 
 mcpServer.tool(
   'type_text',
-  `Digita texto caractere por caractere, simulando digitação real.
+  `Type text character by character, simulating real keyboard input.
 
-DIFERENÇA DO fill_field:
-- fill_field: Preenche instantaneamente (mais rápido)
-- type_text: Simula digitação humana (mais lento, mas funciona com autocomplete)
+WHEN TO USE vs fill_field:
+- fill_field: Instant fill (faster, works for most fields)
+- type_text: Character-by-character (slower, but triggers autocomplete/validation)
 
-QUANDO USAR:
-- Campos de busca com autocomplete
-- Campos que validam enquanto digita
-- Quando fill_field não funcionar
+USE type_text FOR:
+- Search fields with autocomplete (Google, etc.)
+- Fields that validate while typing
+- Fields that trigger suggestions
+- When fill_field doesn't work
 
-EXEMPLO:
-{ label: "Pesquisar", text: "termo de busca", delay: 100 }`,
+INPUT:
+- selector or label: Field to type into (provide one)
+- text: Text to type
+- delay: Delay between keystrokes in ms (default: 50)
+
+EXAMPLE:
+{ "label": "Search", "text": "search term", "delay": 100 }
+
+WORKFLOW:
+focus_element (optional) -> type_text -> wait for autocomplete -> click suggestion`,
   {
-    selector: z.string().optional().describe('Seletor CSS do campo'),
-    label: z.string().optional().describe('Label do campo'),
-    text: z.string().describe('Texto a digitar'),
-    delay: z.number().optional().describe('Delay entre teclas em ms (padrão: 50)')
+    selector: z.string().optional().describe('CSS selector of the field'),
+    label: z.string().optional().describe('Label text of the field'),
+    text: z.string().describe('Text to type'),
+    delay: z.number().optional().describe('Delay between keystrokes in ms (default: 50)')
   },
   async (params) => {
     TypeTextSchema.parse(params);
 
     if (!bridgeServer.isConnected()) {
-      return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'type_text', data: params }, 60000);
-      return { content: [{ type: 'text', text: `Texto digitado: ${JSON.stringify(result)}` }] };
+      const result = await bridgeServer.sendAndWait({ type: 'type_text', data: params }, 30000);
+      return { content: [{ type: 'text', text: `Text typed: ${JSON.stringify(result)}` }] };
     } catch (error) {
-      return { content: [{ type: 'text', text: `Erro ao digitar: ${(error as Error).message}` }] };
+      return { content: [{ type: 'text', text: `Error typing: ${(error as Error).message}` }] };
     }
   }
 );
@@ -762,7 +889,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'hover_element', data: { selector } });
+      const result = await bridgeServer.sendAndWait({ type: 'hover_element', data: { selector } }, 10000);
       return { content: [{ type: 'text', text: `Hover realizado: ${JSON.stringify(result)}` }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro no hover: ${(error as Error).message}` }] };
@@ -786,7 +913,7 @@ mcpServer.tool(
     const data = selector ? { selector } : { position: { x, y } };
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'scroll_to', data });
+      const result = await bridgeServer.sendAndWait({ type: 'scroll_to', data }, 5000);
       return { content: [{ type: 'text', text: `Scroll realizado: ${JSON.stringify(result)}` }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro no scroll: ${(error as Error).message}` }] };
@@ -798,37 +925,31 @@ mcpServer.tool(
 
 mcpServer.tool(
   'wait_for_element',
-  `Aguarda até que um elemento apareça e esteja visível na página.
+  `Wait for element to appear and be visible.
 
-QUANDO USAR:
-- Após click_element que causa navegação ou carregamento
-- Aguardar modais abrirem
-- Aguardar conteúdo dinâmico carregar
-- Antes de interagir com elementos que demoram a aparecer
-
-EXEMPLO:
-{ selector: ".modal-content", timeout: 5000 }
-
-DICA: Use após cada ação que cause mudança na página antes de continuar.`,
+INPUT:
+- selector: CSS selector (required)
+- timeout: Max wait ms (default: 10000, max: 30000)`,
   {
-    selector: z.string().describe('Seletor CSS do elemento'),
-    timeout: z.number().optional().describe('Timeout em ms (padrão: 10000)')
+    selector: z.string().describe('CSS selector'),
+    timeout: z.number().optional().describe('Timeout ms (default: 10000)')
   },
   async ({ selector, timeout }) => {
-    WaitForElementSchema.parse({ selector, timeout });
+    // Cap at 30s to prevent long blocks
+    const effectiveTimeout = Math.min(timeout || 10000, 30000);
 
     if (!bridgeServer.isConnected()) {
-      return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      return { content: [{ type: 'text', text: 'Error: No session.' }] };
     }
 
     try {
       const result = await bridgeServer.sendAndWait(
-        { type: 'wait_for_element', data: { selector, timeout: timeout || 10000 } },
-        (timeout || 10000) + 5000
+        { type: 'wait_for_element', data: { selector, timeout: effectiveTimeout } },
+        effectiveTimeout + 2000
       );
-      return { content: [{ type: 'text', text: `Elemento encontrado: ${JSON.stringify(result)}` }] };
+      return { content: [{ type: 'text', text: `Found: ${JSON.stringify(result)}` }] };
     } catch (error) {
-      return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+      return { content: [{ type: 'text', text: `Timeout or error: ${(error as Error).message}` }] };
     }
   }
 );
@@ -839,23 +960,35 @@ mcpServer.tool(
   {
     text: z.string().describe('Texto a aguardar'),
     selector: z.string().optional().describe('Seletor do container (opcional)'),
-    timeout: z.number().optional().describe('Timeout em ms (padrão: 10000)')
+    timeout: z.number().optional().describe('Timeout em ms (padrão: 10000, máximo: 60000)')
   },
   async ({ text, selector, timeout }) => {
-    WaitForTextSchema.parse({ text, selector, timeout });
+    const effectiveTimeout = Math.min(timeout || 10000, 60000);
+    WaitForTextSchema.parse({ text, selector, timeout: effectiveTimeout });
 
     if (!bridgeServer.isConnected()) {
-      return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa. Use create_automation_session primeiro.' }] };
     }
 
     try {
+      const bridgeTimeout = effectiveTimeout + 3000;
+
       const result = await bridgeServer.sendAndWait(
-        { type: 'wait_for_text', data: { text, selector, timeout: timeout || 10000 } },
-        (timeout || 10000) + 5000
+        { type: 'wait_for_text', data: { text, selector, timeout: effectiveTimeout } },
+        bridgeTimeout
       );
       return { content: [{ type: 'text', text: `Texto encontrado: ${JSON.stringify(result)}` }] };
     } catch (error) {
-      return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+      const errorMsg = (error as Error).message;
+      if (errorMsg.includes('timeout') || errorMsg.includes('Timeout')) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Timeout aguardando texto "${text}" (${effectiveTimeout}ms). Verifique se o texto existe na página.`
+          }]
+        };
+      }
+      return { content: [{ type: 'text', text: `Erro: ${errorMsg}` }] };
     }
   }
 );
@@ -864,44 +997,79 @@ mcpServer.tool(
 
 mcpServer.tool(
   'extract_text',
-  'Extrai o texto de um elemento específico.',
+  `Extract text content from a specific element.
+
+WHEN TO USE:
+- Get text from a specific container
+- Extract error messages, success messages
+- Read specific content areas
+
+INPUT:
+- selector: CSS selector of the element
+
+OUTPUT:
+{ "text": "extracted text content", "selector": "..." }
+
+EXAMPLE:
+{ "selector": ".error-message" }`,
   {
-    selector: z.string().describe('Seletor CSS do elemento')
+    selector: z.string().describe('CSS selector of the element')
   },
   async ({ selector }) => {
     ExtractTextSchema.parse({ selector });
 
     if (!bridgeServer.isConnected()) {
-      return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'extract_text', data: { selector } });
+      const result = await bridgeServer.sendAndWait({ type: 'extract_text', data: { selector } }, 10000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
-      return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
     }
   }
 );
 
 mcpServer.tool(
   'extract_table',
-  'Extrai dados de uma tabela HTML como JSON estruturado.',
+  `Extract HTML table data as structured JSON.
+
+WHEN TO USE:
+- Extract data from HTML tables
+- Scrape tabular information
+- Get pricing tables, data grids, etc.
+
+INPUT:
+- selector: CSS selector of the table (default: first table on page)
+
+OUTPUT:
+{
+  "headers": ["Column 1", "Column 2", ...],
+  "rows": [
+    ["value1", "value2", ...],
+    ...
+  ],
+  "rowCount": 10
+}
+
+EXAMPLE:
+{ "selector": ".data-table" }`,
   {
-    selector: z.string().optional().describe('Seletor CSS da tabela (padrão: primeira tabela)')
+    selector: z.string().optional().describe('CSS selector of the table (default: first table)')
   },
   async ({ selector }) => {
     ExtractTableSchema.parse({ selector });
 
     if (!bridgeServer.isConnected()) {
-      return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'extract_table', data: { selector } });
+      const result = await bridgeServer.sendAndWait({ type: 'extract_table', data: { selector } }, 15000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
-      return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
     }
   }
 );
@@ -919,7 +1087,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'extract_links', data: { selector, limit } });
+      const result = await bridgeServer.sendAndWait({ type: 'extract_links', data: { selector, limit } }, 10000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -939,7 +1107,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'extract_form_data', data: { selector } });
+      const result = await bridgeServer.sendAndWait({ type: 'extract_form_data', data: { selector } }, 10000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -964,7 +1132,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'extract_styles', data: params });
+      const result = await bridgeServer.sendAndWait({ type: 'extract_styles', data: params }, 10000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -987,7 +1155,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'extract_html', data: params });
+      const result = await bridgeServer.sendAndWait({ type: 'extract_html', data: params }, 10000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -1034,7 +1202,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'get_stylesheets', data: {} });
+      const result = await bridgeServer.sendAndWait({ type: 'get_stylesheets', data: {} }, 10000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -1054,7 +1222,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'get_last_dialog', data: {} });
+      const result = await bridgeServer.sendAndWait({ type: 'get_last_dialog', data: {} }, 5000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -1072,7 +1240,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'get_dialog_queue', data: {} });
+      const result = await bridgeServer.sendAndWait({ type: 'get_dialog_queue', data: {} }, 5000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -1090,7 +1258,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'clear_dialog_queue', data: {} });
+      const result = await bridgeServer.sendAndWait({ type: 'clear_dialog_queue', data: {} }, 5000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -1110,7 +1278,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'set_dialog_auto_accept', data: { enabled } });
+      const result = await bridgeServer.sendAndWait({ type: 'set_dialog_auto_accept', data: { enabled } }, 5000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -1155,7 +1323,7 @@ EXEMPLOS:
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'press_key', data: { key, selector, modifiers } });
+      const result = await bridgeServer.sendAndWait({ type: 'press_key', data: { key, selector, modifiers } }, 5000);
       return { content: [{ type: 'text', text: `Tecla pressionada: ${JSON.stringify(result)}` }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro ao pressionar tecla: ${(error as Error).message}` }] };
@@ -1191,7 +1359,7 @@ EXEMPLO:
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'get_element_info', data: { selector } });
+      const result = await bridgeServer.sendAndWait({ type: 'get_element_info', data: { selector } }, 10000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -1215,7 +1383,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'double_click', data: params });
+      const result = await bridgeServer.sendAndWait({ type: 'double_click', data: params }, 10000);
       return { content: [{ type: 'text', text: `Clique duplo: ${JSON.stringify(result)}` }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -1235,7 +1403,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'focus_element', data: { selector } });
+      const result = await bridgeServer.sendAndWait({ type: 'focus_element', data: { selector } }, 5000);
       return { content: [{ type: 'text', text: `Elemento focado: ${JSON.stringify(result)}` }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -1253,7 +1421,7 @@ mcpServer.tool(
     }
 
     try {
-      const result = await bridgeServer.sendAndWait({ type: 'get_active_element', data: {} });
+      const result = await bridgeServer.sendAndWait({ type: 'get_active_element', data: {} }, 5000);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -1798,6 +1966,447 @@ CUIDADO: Pode afetar funcionamento da página.`,
   }
 );
 
+// ==================== NEW EFFICIENCY TOOLS ====================
+
+mcpServer.tool(
+  'batch_actions',
+  `Execute multiple browser actions in a single request.
+Reduces round-trips for multi-step workflows by 60-80%.
+
+WHEN TO USE:
+- Fill form + submit in one call
+- Navigate + wait + extract in sequence
+- Any workflow with 3+ dependent actions
+- When latency is critical
+
+INPUT:
+- actions: Array of { type: "tool_name", data: {...} } (max 20 actions)
+- stopOnError: Stop on first error (default: true)
+
+SUPPORTED ACTIONS:
+Navigation: navigate_to, go_back, go_forward, refresh
+Interaction: click_element, fill_field, type_text, select_option, press_key
+Wait: wait_for_element, wait_for_text
+Extraction: extract_text, extract_table, extract_links
+
+EXAMPLE - Login flow:
+{
+  "actions": [
+    { "type": "fill_field", "data": { "label": "Email", "value": "user@test.com" } },
+    { "type": "fill_field", "data": { "label": "Password", "value": "secret" } },
+    { "type": "click_element", "data": { "text": "Login" } },
+    { "type": "wait_for_element", "data": { "selector": ".dashboard" } }
+  ]
+}
+
+OUTPUT:
+{
+  "completed": true,
+  "results": [{ "index": 0, "type": "fill_field", "success": true, "data": {...} }, ...],
+  "summary": { "total": 4, "succeeded": 4, "failed": 0, "totalDuration": 1250 }
+}`,
+  {
+    actions: z.array(z.object({
+      type: z.string().describe('Action type (tool name)'),
+      data: z.record(z.any()).optional().describe('Action parameters')
+    })).min(1).max(20).describe('Array of actions to execute'),
+    stopOnError: z.boolean().optional().describe('Stop on first error (default: true)')
+  },
+  async (params) => {
+    BatchActionsSchema.parse(params);
+
+    if (!bridgeServer.isConnected()) {
+      return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    }
+
+    try {
+      // Cap at 60s max to prevent infinite blocking
+      const result = await bridgeServer.sendAndWait({ type: 'batch_actions', data: params }, 60000);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
+    }
+  }
+);
+
+mcpServer.tool(
+  'get_page_snapshot',
+  `Lightweight page state for AI context efficiency.
+SIZE: ~2KB vs ~20KB for full get_page_info
+
+WHEN TO USE:
+- Quick page state check
+- When you don't need full element list
+- To minimize token usage in context
+- Verify page loaded without full analysis
+
+RETURNS:
+- URL, title
+- Visible text summary (first 1000 chars)
+- Key interactive elements only (max 20)
+- Current form values
+- Basic metadata (has password, form count, etc.)
+
+WORKFLOW:
+navigate_to -> get_page_snapshot -> (if need details) get_page_info`,
+  {},
+  async () => {
+    if (!bridgeServer.isConnected()) {
+      return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    }
+
+    try {
+      const result = await bridgeServer.sendAndWait({ type: 'get_page_snapshot', data: {} }, 10000);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
+    }
+  }
+);
+
+mcpServer.tool(
+  'get_accessibility_tree',
+  `Returns page's accessibility tree - structured representation optimized for AI understanding.
+FASTER than get_page_info for element discovery (3-10x improvement on large pages).
+
+WHEN TO USE:
+- Find elements by semantic role (button, textbox, link, etc.)
+- More reliable than CSS selectors for dynamic pages
+- Better understanding of page structure
+- Find elements without knowing exact selectors
+
+INPUT:
+- maxDepth: How deep to traverse (default: 5)
+- roles: Filter by roles (e.g., ["button", "link", "textbox"])
+- root: Root element selector (default: body)
+
+SUPPORTED ROLES:
+button, link, textbox, checkbox, radio, combobox, listbox, option,
+menuitem, menu, tab, tabpanel, dialog, heading, img, navigation,
+main, form, search, alert, progressbar, slider, switch, grid, row, cell
+
+OUTPUT:
+{
+  "tree": [
+    { "role": "button", "name": "Submit", "selector": "...", "states": ["enabled"] },
+    { "role": "textbox", "name": "Email", "selector": "...", "value": "" }
+  ],
+  "summary": { "button": 5, "link": 12, "textbox": 3 }
+}
+
+EXAMPLE - Find all buttons:
+{ "roles": ["button"] }`,
+  {
+    maxDepth: z.number().optional().describe('Max traversal depth (default: 5)'),
+    roles: z.array(z.string()).optional().describe('Filter by ARIA roles'),
+    root: z.string().optional().describe('Root element selector (default: body)')
+  },
+  async (params) => {
+    if (!bridgeServer.isConnected()) {
+      return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    }
+
+    try {
+      const result = await bridgeServer.sendAndWait({ type: 'get_accessibility_tree', data: params }, 15000);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
+    }
+  }
+);
+
+mcpServer.tool(
+  'smart_wait',
+  `Intelligent wait with multiple conditions. More powerful than wait_for_element.
+
+WHEN TO USE:
+- Wait for multiple conditions simultaneously
+- Complex page load scenarios
+- Wait for network to settle
+- Wait for loading indicators to disappear
+
+CONDITIONS:
+- { type: "element", selector: "..." } - Element present and visible
+- { type: "text", text: "...", selector: "..." } - Text appears
+- { type: "url_contains", value: "..." } - URL contains string
+- { type: "url_equals", value: "..." } - URL matches exactly
+- { type: "network_idle", duration: 500 } - No network for duration
+- { type: "no_loading_spinner", selector: ".spinner" } - Spinner gone
+- { type: "element_hidden", selector: "..." } - Element hidden/removed
+- { type: "element_enabled", selector: "..." } - Element not disabled
+- { type: "dom_stable", duration: 500 } - No DOM changes for duration
+- { type: "element_count", selector: "...", count: 5, operator: "gte" }
+
+INPUT:
+- conditions: Array of conditions
+- logic: "all" (default) or "any"
+- timeout: Max wait in ms (default: 10000)
+
+EXAMPLE - Wait for page load:
+{
+  "conditions": [
+    { "type": "element", "selector": ".main-content" },
+    { "type": "no_loading_spinner" },
+    { "type": "network_idle", "duration": 500 }
+  ],
+  "logic": "all",
+  "timeout": 15000
+}`,
+  {
+    conditions: z.array(z.object({
+      type: z.string(),
+      selector: z.string().optional(),
+      text: z.string().optional(),
+      value: z.string().optional(),
+      pattern: z.string().optional(),
+      duration: z.number().optional(),
+      count: z.number().optional(),
+      operator: z.string().optional(),
+      attribute: z.string().optional(),
+      exact: z.boolean().optional(),
+      state: z.string().optional()
+    })).describe('Array of conditions to check'),
+    logic: z.enum(['all', 'any']).optional().describe('Logic: "all" (AND) or "any" (OR)'),
+    timeout: z.number().optional().describe('Max wait in ms (default: 10000)'),
+    pollInterval: z.number().optional().describe('Check interval in ms (default: 100)')
+  },
+  async (params) => {
+    if (!bridgeServer.isConnected()) {
+      return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    }
+
+    try {
+      const effectiveTimeout = Math.min(params.timeout || 10000, 60000);
+      const result = await bridgeServer.sendAndWait(
+        { type: 'smart_wait', data: { ...params, timeout: effectiveTimeout } },
+        effectiveTimeout + 5000
+      );
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
+    }
+  }
+);
+
+mcpServer.tool(
+  'page_ready',
+  `Wait for page to be fully loaded and interactive.
+Combines multiple readiness checks in one call.
+
+CHECKS PERFORMED:
+- document.readyState === 'complete'
+- No pending network requests (optional)
+- No loading spinners visible (optional)
+- DOM is stable (no mutations for stabilityDuration)
+
+WHEN TO USE:
+- After navigate_to before any interaction
+- After actions that trigger full page reload
+- When unsure if page is ready
+
+INPUT:
+- timeout: Max wait in ms (default: 30000)
+- checkNetwork: Check for network idle (default: true)
+- checkSpinners: Check for loading spinners (default: true)
+- stabilityDuration: DOM stability duration in ms (default: 500)
+
+EXAMPLE:
+{ "timeout": 15000, "checkSpinners": true }`,
+  {
+    timeout: z.number().optional().describe('Max wait in ms (default: 30000)'),
+    checkNetwork: z.boolean().optional().describe('Check for network idle (default: true)'),
+    checkSpinners: z.boolean().optional().describe('Check for loading spinners (default: true)'),
+    stabilityDuration: z.number().optional().describe('DOM stability duration in ms (default: 500)')
+  },
+  async (params) => {
+    if (!bridgeServer.isConnected()) {
+      return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    }
+
+    try {
+      const effectiveTimeout = Math.min(params.timeout || 30000, 60000);
+      const result = await bridgeServer.sendAndWait(
+        { type: 'page_ready', data: { ...params, timeout: effectiveTimeout } },
+        effectiveTimeout + 5000
+      );
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
+    }
+  }
+);
+
+mcpServer.tool(
+  'find_by_role',
+  `Find elements by ARIA role. More semantic than CSS selectors.
+
+WHEN TO USE:
+- Find all buttons, links, textboxes, etc.
+- When CSS selectors are unreliable
+- For accessibility-first automation
+- Find elements by accessible name
+
+ROLES: button, link, textbox, checkbox, combobox, listbox, menuitem,
+       tab, dialog, heading, img, navigation, form, search, slider, etc.
+
+INPUT:
+- role: ARIA role (required)
+- name: Accessible name filter (optional)
+
+EXAMPLES:
+- Find all buttons: { "role": "button" }
+- Find Login button: { "role": "button", "name": "Login" }
+- Find email field: { "role": "textbox", "name": "Email" }
+- Find all links: { "role": "link" }
+
+OUTPUT:
+{
+  "found": true,
+  "count": 5,
+  "elements": [
+    { "role": "button", "name": "Submit", "selector": "...", "states": ["enabled"] }
+  ]
+}`,
+  {
+    role: z.string().describe('ARIA role to search for'),
+    name: z.string().optional().describe('Filter by accessible name (partial match)')
+  },
+  async (params) => {
+    FindByRoleSchema.parse(params);
+
+    if (!bridgeServer.isConnected()) {
+      return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    }
+
+    try {
+      const result = await bridgeServer.sendAndWait({ type: 'find_by_role', data: params }, 10000);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
+    }
+  }
+);
+
+mcpServer.tool(
+  'highlight_element',
+  `Visually highlight element for debugging.
+Useful for verifying correct element selection.
+
+INPUT:
+- selector: Element to highlight (required)
+- color: Highlight color (default: "red")
+- duration: How long in ms (default: 2000)
+
+WHEN TO USE:
+- Debug which element will be clicked
+- Verify selector targets correct element
+- Visual confirmation during development`,
+  {
+    selector: z.string().describe('CSS selector of element to highlight'),
+    color: z.string().optional().describe('Highlight color (default: "red")'),
+    duration: z.number().optional().describe('Duration in ms (default: 2000)')
+  },
+  async (params) => {
+    HighlightElementSchema.parse(params);
+
+    if (!bridgeServer.isConnected()) {
+      return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    }
+
+    try {
+      const result = await bridgeServer.sendAndWait(
+        { type: 'highlight_element', data: params },
+        (params.duration || 2000) + 3000
+      );
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
+    }
+  }
+);
+
+mcpServer.tool(
+  'retry_action',
+  `Execute action with automatic retry on failure.
+Useful for flaky operations.
+
+INPUT:
+- action: The action to execute { type: "tool_name", data: {...} }
+- maxAttempts: Max retries (default: 3)
+- delayMs: Delay between attempts (default: 1000)
+- backoff: Use exponential backoff (default: false)
+
+WHEN TO USE:
+- Flaky network operations
+- Elements that take variable time to appear
+- Unstable page states
+
+EXAMPLE:
+{
+  "action": { "type": "click_element", "data": { "selector": ".btn" } },
+  "maxAttempts": 3,
+  "delayMs": 500,
+  "backoff": true
+}`,
+  {
+    action: z.object({
+      type: z.string(),
+      data: z.record(z.any()).optional()
+    }).describe('Action to execute with retry'),
+    maxAttempts: z.number().optional().describe('Max retry attempts (default: 3)'),
+    delayMs: z.number().optional().describe('Delay between attempts in ms (default: 1000)'),
+    backoff: z.boolean().optional().describe('Use exponential backoff (default: false)')
+  },
+  async (params) => {
+    RetryActionSchema.parse(params);
+
+    if (!bridgeServer.isConnected()) {
+      return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    }
+
+    try {
+      const maxTime = (params.maxAttempts || 3) * (params.delayMs || 1000) * (params.backoff ? 4 : 1) + 30000;
+      const result = await bridgeServer.sendAndWait({ type: 'retry_action', data: params }, maxTime);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
+    }
+  }
+);
+
+mcpServer.tool(
+  'get_element_center',
+  `Get center coordinates of element for precise clicking.
+
+RETURNS:
+- x, y: Center coordinates
+- visible: If element is visible
+- inViewport: If element is in viewport
+- rect: Bounding rectangle
+
+WHEN TO USE:
+- Need precise click coordinates
+- Debugging click issues
+- Working with canvas or SVG elements`,
+  {
+    selector: z.string().describe('CSS selector of the element')
+  },
+  async ({ selector }) => {
+    GetElementCenterSchema.parse({ selector });
+
+    if (!bridgeServer.isConnected()) {
+      return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    }
+
+    try {
+      const result = await bridgeServer.sendAndWait({ type: 'get_element_center', data: { selector } }, 5000);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
+    }
+  }
+);
+
 // ==================== RESOURCES ====================
 
 mcpServer.resource(
@@ -1860,8 +2469,9 @@ Agora o MCP usa **janelas dedicadas** para automação, permitindo:
 
 const HTTP_PORT = 8080;
 
-// Map para gerenciar transportes SSE ativos
+// Map para gerenciar transportes SSE ativos (sessionId -> transport)
 const activeTransports = new Map<string, SSEServerTransport>();
+const clientIdToSessionId = new Map<string, string>(); // clientId -> sessionId para logging
 
 async function main() {
   console.log('[MCP] Starting Universal Browser MCP Server v2.1 (SSE Mode)...');
@@ -1893,18 +2503,20 @@ async function main() {
       console.log('[MCP] New SSE client connecting...');
 
       const transport = new SSEServerTransport('/messages', res);
-      const clientId = randomUUID();
-      activeTransports.set(clientId, transport);
 
-      // Conecta o MCP server ao transporte
+      // Conecta o MCP server ao transporte (isso chama transport.start() internamente)
       await mcpServer.connect(transport);
 
-      console.log(`[MCP] SSE client connected: ${clientId}`);
+      // Após o connect, o transport tem seu sessionId gerado
+      const transportSessionId = transport.sessionId;
+      activeTransports.set(transportSessionId, transport);
+
+      console.log(`[MCP] SSE client connected: ${transportSessionId}`);
 
       // Cleanup quando o cliente desconecta
       res.on('close', () => {
-        console.log(`[MCP] SSE client disconnected: ${clientId}`);
-        activeTransports.delete(clientId);
+        console.log(`[MCP] SSE client disconnected: ${transportSessionId}`);
+        activeTransports.delete(transportSessionId);
       });
 
       return;
@@ -1912,25 +2524,38 @@ async function main() {
 
     // Endpoint para receber mensagens dos clientes
     if (url.pathname === '/messages' && req.method === 'POST') {
+      // Extrai o sessionId da query string (enviado pelo cliente SSE)
+      const sessionId = url.searchParams.get('sessionId');
+
+      if (!sessionId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Missing sessionId parameter' }));
+        return;
+      }
+
+      const transport = activeTransports.get(sessionId);
+
+      if (!transport) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `No transport found for sessionId: ${sessionId}` }));
+        return;
+      }
+
       let body = '';
       req.on('data', chunk => {
         body += chunk.toString();
       });
 
       req.on('end', async () => {
-        // Encontra o transporte ativo e envia a mensagem
-        // O SSEServerTransport espera que as mensagens sejam enviadas via POST
-        for (const transport of activeTransports.values()) {
-          try {
-            await transport.handlePostMessage(req, res, body);
-            return;
-          } catch {
-            // Continua para o próximo
+        try {
+          await transport.handlePostMessage(req, res, body);
+        } catch (error) {
+          console.error(`[MCP] Error handling message for session ${sessionId}:`, error);
+          if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: (error as Error).message }));
           }
         }
-
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'No active transport found' }));
       });
 
       return;

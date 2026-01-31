@@ -310,6 +310,7 @@ export async function takeScreenshotOfSession(sessionId, format = 'jpeg', qualit
 
 /**
  * Navega para uma URL na aba ativa
+ * Espera a navegação iniciar e retorna imediatamente (não bloqueia)
  */
 export async function navigateInSession(sessionId, url) {
   const session = automationSessions.get(sessionId);
@@ -318,9 +319,28 @@ export async function navigateInSession(sessionId, url) {
     return { success: false, error: 'Session not found' };
   }
 
-  await chrome.tabs.update(session.activeTabId, { url });
+  const tabId = session.activeTabId;
 
-  return { success: true, tabId: session.activeTabId, url };
+  try {
+    // Inicia a navegação
+    await chrome.tabs.update(tabId, { url });
+
+    // Retorna imediatamente após iniciar a navegação
+    // O cliente deve usar wait_for_element ou page_ready para sincronizar
+    return {
+      success: true,
+      tabId,
+      url,
+      message: 'Navigation started. Use wait_for_element or page_ready to wait for page load.'
+    };
+  } catch (error) {
+    return {
+      success: false,
+      tabId,
+      url,
+      error: error.message
+    };
+  }
 }
 
 /**

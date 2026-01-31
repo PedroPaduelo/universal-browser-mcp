@@ -56,7 +56,8 @@ export function handleDebuggerEvent(source, method, params) {
   // Encontra a sessão pelo tabId
   let sessionId = null;
   for (const [sid, session] of automationSessions.entries()) {
-    if (session.tabId === source.tabId) {
+    const tabId = session.activeTabId || session.tabId;
+    if (tabId === source.tabId) {
       sessionId = sid;
       break;
     }
@@ -112,7 +113,8 @@ export function handleDebuggerEvent(source, method, params) {
  */
 export function handleDebuggerDetach(source, reason) {
   for (const [sessionId, session] of automationSessions.entries()) {
-    if (session.tabId === source.tabId) {
+    const tabId = session.activeTabId || session.tabId;
+    if (tabId === source.tabId) {
       const state = getDebuggerState(sessionId);
       if (state) {
         state.attached = false;

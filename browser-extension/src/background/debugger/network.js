@@ -16,8 +16,11 @@ export async function enableNetworkCapture(sessionId) {
   if (!session) throw new Error('Session not found');
   if (!state.attached) await attachDebugger(sessionId);
 
+  const tabId = session.activeTabId || session.tabId;
+  if (!tabId) throw new Error('No active tab in session');
+
   try {
-    await chrome.debugger.sendCommand({ tabId: session.tabId }, 'Network.enable', {});
+    await chrome.debugger.sendCommand({ tabId }, 'Network.enable', {});
     state.networkEnabled = true;
     state.networkLogs = [];
     state.pendingRequests.clear();

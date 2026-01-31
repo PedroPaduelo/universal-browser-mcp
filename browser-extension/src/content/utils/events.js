@@ -124,27 +124,72 @@ export async function simulateKeyPress(element, key, modifiers = {}) {
 
 /**
  * Preenche valor de um campo com eventos
+ * Otimizado para textos grandes - usa chunks para evitar travamentos
  */
 export async function fillFieldValue(field, value) {
+  const CHUNK_SIZE = 500; // Caracteres por chunk
+  const isLargeText = value.length > CHUNK_SIZE;
+
   field.focus();
   await delay(50);
 
+  // Limpa o campo
   field.value = '';
 
   const descriptor = Object.getOwnPropertyDescriptor(
     field.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
     'value'
   );
-  if (descriptor?.set) {
-    descriptor.set.call(field, value);
+
+  if (isLargeText) {
+    // Para textos grandes, insere em chunks para não travar
+    console.log(`[Universal MCP] Large text detected (${value.length} chars), using chunked insertion`);
+
+    let currentValue = '';
+    const chunks = [];
+
+    // Divide em chunks
+    for (let i = 0; i < value.length; i += CHUNK_SIZE) {
+      chunks.push(value.slice(i, i + CHUNK_SIZE));
+    }
+
+    // Insere chunk por chunk com pequena pausa
+    for (let i = 0; i < chunks.length; i++) {
+      currentValue += chunks[i];
+
+      if (descriptor?.set) {
+        descriptor.set.call(field, currentValue);
+      } else {
+        field.value = currentValue;
+      }
+
+      // Dispara input event apenas a cada chunk para não sobrecarregar
+      // Usa flag cancelable: false para evitar que handlers da página bloqueiem
+      const inputEvent = new Event('input', { bubbles: true, cancelable: false });
+      field.dispatchEvent(inputEvent);
+
+      // Pequena pausa entre chunks para dar tempo ao event loop
+      if (i < chunks.length - 1) {
+        await delay(10);
+      }
+    }
   } else {
-    field.value = value;
+    // Para textos pequenos, comportamento normal
+    if (descriptor?.set) {
+      descriptor.set.call(field, value);
+    } else {
+      field.value = value;
+    }
+
+    field.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
-  field.dispatchEvent(new Event('input', { bubbles: true }));
+  // Dispara change e keyup após todo o texto inserido
   field.dispatchEvent(new Event('change', { bubbles: true }));
   field.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
 
+  // Aguarda um pouco antes de blur para dar tempo aos handlers
+  await delay(50);
   field.blur();
 }
 

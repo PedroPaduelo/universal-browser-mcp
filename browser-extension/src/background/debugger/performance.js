@@ -16,11 +16,14 @@ export async function getPerformanceMetrics(sessionId) {
   if (!session) throw new Error('Session not found');
   if (!state.attached) await attachDebugger(sessionId);
 
+  const tabId = session.activeTabId || session.tabId;
+  if (!tabId) throw new Error('No active tab in session');
+
   try {
-    await chrome.debugger.sendCommand({ tabId: session.tabId }, 'Performance.enable', {});
+    await chrome.debugger.sendCommand({ tabId }, 'Performance.enable', {});
 
     const { metrics } = await chrome.debugger.sendCommand(
-      { tabId: session.tabId },
+      { tabId },
       'Performance.getMetrics',
       {}
     );
@@ -50,9 +53,12 @@ export async function evaluateInPage(sessionId, expression, options = {}) {
   if (!session) throw new Error('Session not found');
   if (!state.attached) await attachDebugger(sessionId);
 
+  const tabId = session.activeTabId || session.tabId;
+  if (!tabId) throw new Error('No active tab in session');
+
   try {
     const result = await chrome.debugger.sendCommand(
-      { tabId: session.tabId },
+      { tabId },
       'Runtime.evaluate',
       {
         expression,
@@ -90,16 +96,19 @@ export async function setRequestInterception(sessionId, patterns, enabled = true
   if (!session) throw new Error('Session not found');
   if (!state.attached) await attachDebugger(sessionId);
 
+  const tabId = session.activeTabId || session.tabId;
+  if (!tabId) throw new Error('No active tab in session');
+
   try {
     if (enabled) {
       await chrome.debugger.sendCommand(
-        { tabId: session.tabId },
+        { tabId },
         'Fetch.enable',
         { patterns: patterns || [{ urlPattern: '*' }] }
       );
     } else {
       await chrome.debugger.sendCommand(
-        { tabId: session.tabId },
+        { tabId },
         'Fetch.disable',
         {}
       );

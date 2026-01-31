@@ -88,6 +88,10 @@ export async function handleMCPMessage(message) {
         result = await takeScreenshotOfSession(data?.sessionId, data?.format, data?.quality);
         break;
 
+      case 'navigate_command':
+        result = await navigateInSession(data.sessionId, data.url);
+        break;
+
       case 'ping':
         result = { pong: true, timestamp: Date.now() };
         break;

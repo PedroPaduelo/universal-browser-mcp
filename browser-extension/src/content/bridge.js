@@ -4,7 +4,7 @@
 
 import { interceptDialogs, handleGetLastDialog, handleGetDialogQueue, handleClearDialogQueue, handleSetDialogAutoAccept } from './handlers/dialog.js';
 import { handleNavigateTo, handleGoBack, handleGoForward, handleRefresh, handleGetCurrentUrl } from './handlers/navigation.js';
-import { handleGetPageInfo, handleGetPageTitle, handleGetPageText, handleGetPageHtml, handleExtractLinks } from './handlers/page-info.js';
+import { handleGetPageInfo, handleGetPageTitle, handleGetPageText, handleGetPageHtml, handleExtractLinks, handleGetPageSnapshot } from './handlers/page-info.js';
 import { handleClickElement, handleDoubleClick, handleHoverElement, handlePressKey, handleTypeText, handleFocusElement, handleGetActiveElement, handleScrollTo } from './handlers/interaction.js';
 import { handleFillField, handleFillForm, handleSelectOption, handleExtractFormData } from './handlers/form.js';
 import { handleWaitForElement, handleWaitForText } from './handlers/wait.js';
@@ -12,6 +12,9 @@ import { handleExtractText, handleExtractTable, handleExtractHtml, handleExtract
 import { handleValidatePage } from './handlers/validation.js';
 import { handleExecuteScript } from './handlers/script.js';
 import { handleGetElementInfo } from './handlers/element-info.js';
+import { handleBatchActions } from './handlers/batch.js';
+import { handleGetAccessibilityTree, handleFindByRole, handleHighlightElement, handleGetElementCenter } from './handlers/accessibility.js';
+import { handleSmartWait, handlePageReady, handleRetryAction } from './handlers/smart-wait.js';
 
 export class UniversalBrowserBridge {
   constructor() {
@@ -223,7 +226,8 @@ export class UniversalBrowserBridge {
     }
 
     this.reconnectAttempts++;
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+    // Faster reconnect: 500ms, 1s, 2s, 4s, max 10s
+    const delay = Math.min(500 * Math.pow(2, this.reconnectAttempts - 1), 10000);
 
     console.log(`[Universal MCP] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
     setTimeout(() => this.connect(), delay);
@@ -248,11 +252,12 @@ export class UniversalBrowserBridge {
     }
   }
 
-  sendResponse(requestId, success, data, error = null) {
+  sendResponse(requestId, success, data, error = null, mcpInstanceId = null) {
     this.sendMessage({
       type: 'response',
       requestId,
       sessionId: this.sessionId,
+      mcpInstanceId, // CRITICAL: Include for proper routing between MCP instances
       success,
       data,
       error
@@ -262,10 +267,31 @@ export class UniversalBrowserBridge {
   // ==================== MESSAGE HANDLER ====================
 
   async handleMessage(message) {
-    const { type, requestId, data } = message;
+    const { type, requestId, data, mcpInstanceId } = message;
 
-    console.log(`[Universal MCP] [${this.sessionId}] Received:`, type);
+    // Log apenas o tipo, não os dados (podem ser grandes)
+    const dataSize = data ? JSON.stringify(data).length : 0;
+    console.log(`[Universal MCP] [${this.sessionId}] Received:`, type, `(${dataSize} bytes)`, mcpInstanceId ? `(from: ${mcpInstanceId})` : '');
     this.updateStatus('processing');
+
+    // Global timeout to ensure response is always sent (max 60s for long operations)
+    // Most operations should complete in < 30s
+    const globalTimeoutMs = 60000;
+    let responded = false;
+
+    const sendOnce = (success, result, error) => {
+      if (responded) return;
+      responded = true;
+      this.sendResponse(requestId, success, result, error, mcpInstanceId);
+      this.updateStatus(this.isConnected ? 'connected' : 'disconnected');
+    };
+
+    const globalTimeout = setTimeout(() => {
+      if (!responded) {
+        console.error(`[Universal MCP] Global timeout for ${type}`);
+        sendOnce(false, null, `Global timeout (${globalTimeoutMs}ms) for operation: ${type}`);
+      }
+    }, globalTimeoutMs);
 
     try {
       let result;
@@ -397,17 +423,62 @@ export class UniversalBrowserBridge {
           result = await handleExecuteScript(data);
           break;
 
+        // Batch operations
+        case 'batch_actions':
+          result = await handleBatchActions(data);
+          break;
+
+        // Page snapshot (lightweight)
+        case 'get_page_snapshot':
+          result = handleGetPageSnapshot();
+          break;
+
+        // Accessibility tree
+        case 'get_accessibility_tree':
+          result = handleGetAccessibilityTree(data);
+          break;
+
+        // Find by role
+        case 'find_by_role':
+          result = handleFindByRole(data);
+          break;
+
+        // Smart wait with conditions
+        case 'smart_wait':
+          result = await handleSmartWait(data);
+          break;
+
+        // Page ready check
+        case 'page_ready':
+          result = await handlePageReady(data);
+          break;
+
+        // Highlight element (debugging)
+        case 'highlight_element':
+          result = await handleHighlightElement(data);
+          break;
+
+        // Retry action
+        case 'retry_action':
+          result = await handleRetryAction(data);
+          break;
+
+        // Get element center
+        case 'get_element_center':
+          result = handleGetElementCenter(data);
+          break;
+
         default:
           throw new Error(`Unknown message type: ${type}`);
       }
 
-      this.sendResponse(requestId, true, result);
+      clearTimeout(globalTimeout);
+      sendOnce(true, result, null);
 
     } catch (error) {
+      clearTimeout(globalTimeout);
       console.error('[Universal MCP] Handler error:', error);
-      this.sendResponse(requestId, false, null, error.message);
+      sendOnce(false, null, error.message);
     }
-
-    this.updateStatus(this.isConnected ? 'connected' : 'disconnected');
   }
 }

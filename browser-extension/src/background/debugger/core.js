@@ -14,6 +14,11 @@ export async function attachDebugger(sessionId) {
     throw new Error(`Session not found: ${sessionId}`);
   }
 
+  const tabId = session.activeTabId || session.tabId;
+  if (!tabId) {
+    throw new Error(`No active tab in session: ${sessionId}`);
+  }
+
   const state = initDebuggerState(sessionId);
 
   if (state.attached) {
@@ -21,7 +26,7 @@ export async function attachDebugger(sessionId) {
   }
 
   try {
-    await chrome.debugger.attach({ tabId: session.tabId }, '1.3');
+    await chrome.debugger.attach({ tabId }, '1.3');
     state.attached = true;
 
     console.log(`[Universal MCP] Debugger attached to session ${sessionId}`);
@@ -29,23 +34,23 @@ export async function attachDebugger(sessionId) {
     return {
       success: true,
       message: 'Debugger attached',
-      tabId: session.tabId
+      tabId
     };
   } catch (error) {
     // Se o erro é que outro debugger já está anexado, tenta desanexar e reanexar
     if (error.message && error.message.includes('Another debugger is already attached')) {
-      console.log(`[Universal MCP] Debugger already attached to tab ${session.tabId}, attempting to detach and reattach...`);
+      console.log(`[Universal MCP] Debugger already attached to tab ${tabId}, attempting to detach and reattach...`);
 
       try {
         // Tenta desanexar o debugger existente
-        await chrome.debugger.detach({ tabId: session.tabId });
-        console.log(`[Universal MCP] Previous debugger detached from tab ${session.tabId}`);
+        await chrome.debugger.detach({ tabId });
+        console.log(`[Universal MCP] Previous debugger detached from tab ${tabId}`);
 
         // Aguarda um pouco para o Chrome processar
         await new Promise(resolve => setTimeout(resolve, 100));
 
         // Tenta anexar novamente
-        await chrome.debugger.attach({ tabId: session.tabId }, '1.3');
+        await chrome.debugger.attach({ tabId }, '1.3');
         state.attached = true;
 
         console.log(`[Universal MCP] Debugger reattached to session ${sessionId}`);
@@ -53,7 +58,7 @@ export async function attachDebugger(sessionId) {
         return {
           success: true,
           message: 'Debugger reattached (previous debugger was detached)',
-          tabId: session.tabId
+          tabId
         };
       } catch (retryError) {
         // Se ainda falhar, marca como anexado e tenta usar mesmo assim
@@ -64,7 +69,7 @@ export async function attachDebugger(sessionId) {
         return {
           success: true,
           message: 'Assuming debugger is already attached by this extension',
-          tabId: session.tabId
+          tabId
         };
       }
     }
@@ -84,8 +89,10 @@ export async function detachDebugger(sessionId) {
     return { success: true, message: 'Debugger not attached' };
   }
 
+  const tabId = session.activeTabId || session.tabId;
+
   try {
-    await chrome.debugger.detach({ tabId: session.tabId });
+    await chrome.debugger.detach({ tabId });
     state.attached = false;
     state.networkEnabled = false;
     state.consoleEnabled = false;

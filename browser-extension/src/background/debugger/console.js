@@ -16,9 +16,12 @@ export async function enableConsoleCapture(sessionId) {
   if (!session) throw new Error('Session not found');
   if (!state.attached) await attachDebugger(sessionId);
 
+  const tabId = session.activeTabId || session.tabId;
+  if (!tabId) throw new Error('No active tab in session');
+
   try {
-    await chrome.debugger.sendCommand({ tabId: session.tabId }, 'Runtime.enable', {});
-    await chrome.debugger.sendCommand({ tabId: session.tabId }, 'Log.enable', {});
+    await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable', {});
+    await chrome.debugger.sendCommand({ tabId }, 'Log.enable', {});
 
     state.consoleEnabled = true;
     state.consoleLogs = [];
