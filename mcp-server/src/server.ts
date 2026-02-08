@@ -176,6 +176,75 @@ async function main() {
           return;
         }
 
+        // Stale session ID: auto-recover by creating a new session with the same ID
+        if (sessionId && !transports[sessionId]) {
+          console.log(`[MCP] Stale session ${sessionId}, auto-recovering...`);
+
+          // Create transport that reuses the same session ID so client stays in sync
+          const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => sessionId,
+          });
+
+          const mcpServer = createMcpServer();
+          await mcpServer.connect(transport);
+
+          // Store transport immediately with the known session ID
+          transports[sessionId] = transport;
+          console.log(`[MCP] Auto-recovered session: ${sessionId}`);
+
+          transport.onclose = () => {
+            console.log(`[MCP] Transport closed for session: ${sessionId}`);
+            delete transports[sessionId];
+            sessionManager.removeSession(sessionId);
+          };
+
+          // If it's an initialize request, handle normally
+          if (isInitializeRequest(parsedBody)) {
+            await transport.handleRequest(req, res, parsedBody);
+            return;
+          }
+
+          // For non-initialize requests, we need to initialize first internally
+          // Send a synthetic initialize to set up the transport
+          const initReq = {
+            jsonrpc: '2.0',
+            id: 'auto-init',
+            method: 'initialize',
+            params: {
+              protocolVersion: '2025-03-26',
+              capabilities: {},
+              clientInfo: { name: 'auto-recover', version: '1.0.0' }
+            }
+          };
+
+          // Create a minimal fake response to absorb the initialize response
+          const fakeRes = {
+            writeHead: (..._args: any[]) => fakeRes,
+            write: (_chunk: any) => true,
+            end: (_chunk?: any) => {},
+            setHeader: (..._args: any[]) => fakeRes,
+            getHeader: () => undefined,
+            get headersSent() { return false; },
+            get finished() { return false; },
+            statusCode: 200,
+            on: () => fakeRes,
+            once: () => fakeRes,
+            emit: () => false,
+            removeListener: () => fakeRes,
+            flushHeaders: () => {},
+          } as unknown as ServerResponse;
+
+          await transport.handleRequest(
+            Object.assign(Object.create(req), { method: 'POST', headers: { ...req.headers, 'mcp-session-id': undefined } }),
+            fakeRes,
+            initReq
+          );
+
+          // Now handle the actual request
+          await transport.handleRequest(req, res, parsedBody);
+          return;
+        }
+
         // Invalid: POST without session ID and not an initialize request
         if (!sessionId) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
