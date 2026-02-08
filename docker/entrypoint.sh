@@ -14,6 +14,11 @@ echo "Starting noVNC on port 6080..."
 websockify --web /usr/share/novnc 6080 localhost:5900 &
 sleep 1
 
+echo "Starting MCP server on port 8080 (background)..."
+node /app/mcp-server/dist/server.js &
+MCP_PID=$!
+sleep 3
+
 echo "Starting Google Chrome with extension..."
 /usr/bin/google-chrome \
   --no-sandbox \
@@ -25,7 +30,6 @@ echo "Starting Google Chrome with extension..."
   --load-extension=/app/browser-extension \
   --user-data-dir=/home/mcp/.config/google-chrome \
   "about:blank" &
-sleep 3
 
-echo "Starting MCP server on port 8080..."
-exec node /app/mcp-server/dist/server.js
+echo "All services started. Waiting for MCP server (PID $MCP_PID)..."
+wait $MCP_PID
