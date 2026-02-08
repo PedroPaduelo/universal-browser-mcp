@@ -26,13 +26,14 @@ echo "  Waiting 3s for WebSocket bridge (port 3002)..."
 sleep 3
 
 echo "[5/5] Starting Google Chrome with extension..."
-echo "  Extension path: /app/browser-extension"
-ls -la /app/browser-extension/ || echo "  WARNING: extension directory not found!"
-echo "  User data dir: /home/mcp/.config/google-chrome"
+echo "  Extension files:"
+ls -la /app/browser-extension/
+ls -la /app/browser-extension/dist/
 
-# Clean up stale Chrome lock files from previous container runs
+# Clean up stale Chrome lock/state files from previous container runs
 CHROME_DIR="/home/mcp/.config/google-chrome"
 rm -f "$CHROME_DIR/SingletonLock" "$CHROME_DIR/SingletonSocket" "$CHROME_DIR/SingletonCookie"
+rm -rf "$CHROME_DIR/Crashpad"
 echo "  Cleaned up Chrome lock files"
 
 /usr/bin/google-chrome \
@@ -40,31 +41,26 @@ echo "  Cleaned up Chrome lock files"
   --disable-dev-shm-usage \
   --disable-gpu \
   --no-first-run \
+  --no-default-browser-check \
   --disable-default-apps \
-  --disable-extensions-except=/app/browser-extension \
+  --disable-popup-blocking \
+  --disable-translate \
+  --disable-background-timer-throttling \
+  --disable-renderer-backgrounding \
+  --disable-backgrounding-occluded-windows \
   --load-extension=/app/browser-extension \
   --user-data-dir=/home/mcp/.config/google-chrome \
+  --enable-logging=stderr \
+  --v=1 \
   "about:blank" 2>&1 &
 CHROME_PID=$!
 echo "  Chrome started (PID $CHROME_PID)"
 
-sleep 2
+sleep 5
 if kill -0 $CHROME_PID 2>/dev/null; then
-  echo "  Chrome is running OK"
+  echo "  Chrome is running OK (PID $CHROME_PID)"
 else
-  echo "  WARNING: Chrome may have crashed! Retrying..."
-  /usr/bin/google-chrome \
-    --no-sandbox \
-    --disable-dev-shm-usage \
-    --disable-gpu \
-    --no-first-run \
-    --disable-default-apps \
-    --disable-extensions-except=/app/browser-extension \
-    --load-extension=/app/browser-extension \
-    --user-data-dir=/home/mcp/.config/google-chrome \
-    "about:blank" 2>&1 &
-  CHROME_PID=$!
-  echo "  Chrome retry started (PID $CHROME_PID)"
+  echo "  WARNING: Chrome crashed!"
 fi
 
 echo ""
