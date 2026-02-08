@@ -30,6 +30,11 @@ echo "  Extension path: /app/browser-extension"
 ls -la /app/browser-extension/ || echo "  WARNING: extension directory not found!"
 echo "  User data dir: /home/mcp/.config/google-chrome"
 
+# Clean up stale Chrome lock files from previous container runs
+CHROME_DIR="/home/mcp/.config/google-chrome"
+rm -f "$CHROME_DIR/SingletonLock" "$CHROME_DIR/SingletonSocket" "$CHROME_DIR/SingletonCookie"
+echo "  Cleaned up Chrome lock files"
+
 /usr/bin/google-chrome \
   --no-sandbox \
   --disable-dev-shm-usage \
