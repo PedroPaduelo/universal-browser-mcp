@@ -22,12 +22,15 @@ RUN cd browser-extension && npm ci && npm run build
 # ============================================
 FROM node:22-slim AS runtime
 
-# Install Google Chrome and Xvfb dependencies
+# Install Google Chrome, Xvfb, x11vnc, and noVNC
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     gnupg \
     ca-certificates \
     xvfb \
+    x11vnc \
+    novnc \
+    websockify \
     libx11-xcb1 \
     libxcomposite1 \
     libxdamage1 \
@@ -77,6 +80,6 @@ RUN useradd -m -s /bin/bash mcp \
 
 USER mcp
 
-EXPOSE 8080
+EXPOSE 8080 6080
 
 ENTRYPOINT ["/entrypoint.sh"]
