@@ -25,16 +25,17 @@ echo "  MCP server started (PID $MCP_PID)"
 echo "  Waiting 3s for WebSocket bridge (port 3002)..."
 sleep 3
 
-echo "[5/5] Starting Google Chrome with extension..."
-echo "  Extension files:"
-ls -la /app/browser-extension/
-ls -la /app/browser-extension/dist/
+echo "[5/5] Starting Google Chrome..."
 
 # Clean up stale Chrome lock/state files from previous container runs
 CHROME_DIR="/home/mcp/.config/google-chrome"
 rm -f "$CHROME_DIR/SingletonLock" "$CHROME_DIR/SingletonSocket" "$CHROME_DIR/SingletonCookie"
 rm -rf "$CHROME_DIR/Crashpad"
 echo "  Cleaned up Chrome lock files"
+
+# Show registered external extensions
+echo "  External extensions:"
+ls -la /opt/google/chrome/extensions/ 2>/dev/null || echo "  (none)"
 
 /usr/bin/google-chrome \
   --no-sandbox \
@@ -48,10 +49,7 @@ echo "  Cleaned up Chrome lock files"
   --disable-background-timer-throttling \
   --disable-renderer-backgrounding \
   --disable-backgrounding-occluded-windows \
-  --load-extension=/app/browser-extension \
   --user-data-dir=/home/mcp/.config/google-chrome \
-  --enable-logging=stderr \
-  --v=1 \
   "about:blank" 2>&1 &
 CHROME_PID=$!
 echo "  Chrome started (PID $CHROME_PID)"

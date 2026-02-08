@@ -3,6 +3,8 @@
 # ============================================
 FROM node:22-slim AS builder
 
+RUN apt-get update && apt-get install -y --no-install-recommends zip && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build
 
 # Build mcp-server
@@ -16,6 +18,15 @@ COPY browser-extension/package.json browser-extension/package-lock.json* browser
 COPY browser-extension/esbuild.config.js browser-extension/
 COPY browser-extension/src/ browser-extension/src/
 RUN cd browser-extension && npm install && npm run build
+
+# Assemble extension directory (built dist + static files)
+COPY browser-extension/manifest.json browser-extension/manifest.json
+COPY browser-extension/popup.html browser-extension/popup.html
+COPY browser-extension/popup.js browser-extension/popup.js
+
+# Pack extension as CRX3 for Chrome external install
+COPY docker/pack-extension.mjs /build/pack-extension.mjs
+RUN node pack-extension.mjs /build/browser-extension /build/extension.crx /build/extension-id.txt
 
 # ============================================
 # Stage 2: Runtime
@@ -48,6 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     libgtk-3-0 \
     fonts-liberation \
+    fonts-noto-color-emoji \
     xdg-utils \
   && wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
   && apt-get install -y --no-install-recommends ./google-chrome-stable_current_amd64.deb \
@@ -63,11 +75,31 @@ COPY --from=builder /build/mcp-server/package.json mcp-server/
 COPY --from=builder /build/mcp-server/package-lock.json* mcp-server/
 RUN cd mcp-server && npm install --omit=dev
 
-# Copy browser-extension (built assets + manifest + popup)
+# Copy browser-extension (for reference / popup access)
 COPY --from=builder /build/browser-extension/dist/ browser-extension/dist/
 COPY browser-extension/manifest.json browser-extension/manifest.json
 COPY browser-extension/popup.html browser-extension/popup.html
 COPY browser-extension/popup.js browser-extension/popup.js
+
+# Install extension via Chrome external extensions mechanism
+COPY --from=builder /build/extension.crx /opt/extensions/extension.crx
+COPY --from=builder /build/extension-id.txt /tmp/extension-id.txt
+RUN EXT_ID=$(cat /tmp/extension-id.txt) && \
+    mkdir -p /opt/google/chrome/extensions && \
+    echo "{\"external_crx\": \"/opt/extensions/extension.crx\", \"external_version\": \"1.0.0\"}" \
+      > "/opt/google/chrome/extensions/${EXT_ID}.json" && \
+    chmod 644 "/opt/google/chrome/extensions/${EXT_ID}.json" && \
+    echo "Chrome external extension registered: ${EXT_ID}"
+
+# Chrome managed policies: allow the extension, suppress prompts
+RUN EXT_ID=$(cat /tmp/extension-id.txt) && \
+    mkdir -p /etc/opt/chrome/policies/managed && \
+    echo "{ \
+      \"ExtensionInstallAllowlist\": [\"${EXT_ID}\"], \
+      \"ExtensionAllowedTypes\": [\"extension\"], \
+      \"BlockExternalExtensions\": false \
+    }" > /etc/opt/chrome/policies/managed/extension_policy.json && \
+    chmod 644 /etc/opt/chrome/policies/managed/extension_policy.json
 
 # Copy entrypoint
 COPY docker/entrypoint.sh /entrypoint.sh
