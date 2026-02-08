@@ -6,16 +6,16 @@ FROM node:22-slim AS builder
 WORKDIR /build
 
 # Build mcp-server
-COPY mcp-server/package.json mcp-server/package-lock.json mcp-server/
+COPY mcp-server/package.json mcp-server/package-lock.json* mcp-server/
 COPY mcp-server/tsconfig.json mcp-server/
 COPY mcp-server/src/ mcp-server/src/
-RUN cd mcp-server && npm ci && npm run build
+RUN cd mcp-server && npm install && npm run build
 
 # Build browser-extension
-COPY browser-extension/package.json browser-extension/package-lock.json browser-extension/
+COPY browser-extension/package.json browser-extension/package-lock.json* browser-extension/
 COPY browser-extension/esbuild.config.js browser-extension/
 COPY browser-extension/src/ browser-extension/src/
-RUN cd browser-extension && npm ci && npm run build
+RUN cd browser-extension && npm install && npm run build
 
 # ============================================
 # Stage 2: Runtime
@@ -59,9 +59,9 @@ WORKDIR /app
 
 # Copy mcp-server build artifacts and install production deps
 COPY --from=builder /build/mcp-server/dist/ mcp-server/dist/
-COPY --from=builder /build/mcp-server/package.json mcp-server/package.json
-COPY --from=builder /build/mcp-server/package-lock.json mcp-server/package-lock.json
-RUN cd mcp-server && npm ci --omit=dev
+COPY --from=builder /build/mcp-server/package.json mcp-server/
+COPY --from=builder /build/mcp-server/package-lock.json* mcp-server/
+RUN cd mcp-server && npm install --omit=dev
 
 # Copy browser-extension (built assets + manifest + popup)
 COPY --from=builder /build/browser-extension/dist/ browser-extension/dist/
