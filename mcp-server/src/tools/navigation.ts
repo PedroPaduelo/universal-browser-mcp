@@ -11,8 +11,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BridgeServer } from '../websocket/bridge-server.js';
 import { NavigateToSchema } from '../schemas/index.js';
+import { SessionManager, getSessionOrError } from '../session-manager.js';
 
-export function registerNavigationTools(mcpServer: McpServer, bridgeServer: BridgeServer) {
+export function registerNavigationTools(mcpServer: McpServer, bridgeServer: BridgeServer, sessionManager: SessionManager) {
   mcpServer.tool(
     'navigate_to',
     `Navigate to a URL in the automation window. Returns immediately.
@@ -22,17 +23,17 @@ INPUT:
 
 WORKFLOW: navigate_to -> wait_for_element -> get_page_info`,
     { url: z.string().describe('Full URL to navigate to') },
-    async ({ url }) => {
+    async ({ url }, extra) => {
       NavigateToSchema.parse({ url });
 
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Error: No session. Use create_automation_session first.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
         await Promise.race([
-          bridgeServer.sendCommandToBackground('navigate_command', { sessionId, url }, 3000),
+          bridgeServer.sendCommandToBackground('navigate_command', { sessionId: session.browserSessionId, url }, 3000),
           new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
         ]);
         return { content: [{ type: 'text', text: `Navigating to: ${url}` }] };
@@ -46,13 +47,14 @@ WORKFLOW: navigate_to -> wait_for_element -> get_page_info`,
     'go_back',
     'Volta para a página anterior no histórico do browser.',
     {},
-    async () => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        await bridgeServer.sendAndWait({ type: 'go_back', data: {} }, 5000);
+        await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'go_back', data: {} }, 5000);
       } catch { /* ignore timeout */ }
       return { content: [{ type: 'text', text: 'Voltando para página anterior...' }] };
     }
@@ -62,13 +64,14 @@ WORKFLOW: navigate_to -> wait_for_element -> get_page_info`,
     'go_forward',
     'Avança para a próxima página no histórico do browser.',
     {},
-    async () => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        await bridgeServer.sendAndWait({ type: 'go_forward', data: {} }, 5000);
+        await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'go_forward', data: {} }, 5000);
       } catch { /* ignore timeout */ }
       return { content: [{ type: 'text', text: 'Avançando para próxima página...' }] };
     }
@@ -78,13 +81,14 @@ WORKFLOW: navigate_to -> wait_for_element -> get_page_info`,
     'refresh',
     'Recarrega a página atual.',
     {},
-    async () => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        await bridgeServer.sendAndWait({ type: 'refresh', data: {} }, 5000);
+        await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'refresh', data: {} }, 5000);
       } catch { /* ignore timeout */ }
       return { content: [{ type: 'text', text: 'Recarregando página...' }] };
     }
@@ -94,13 +98,14 @@ WORKFLOW: navigate_to -> wait_for_element -> get_page_info`,
     'get_current_url',
     'Retorna a URL atual da página na sessão de automação.',
     {},
-    async () => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_current_url', data: {} }, 5000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_current_url', data: {} }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };

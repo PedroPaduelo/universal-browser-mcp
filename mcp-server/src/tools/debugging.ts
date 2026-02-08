@@ -11,8 +11,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BridgeServer } from '../websocket/bridge-server.js';
+import { SessionManager, getSessionOrError } from '../session-manager.js';
 
-export function registerDebuggingTools(mcpServer: McpServer, bridgeServer: BridgeServer) {
+export function registerDebuggingTools(mcpServer: McpServer, bridgeServer: BridgeServer, sessionManager: SessionManager) {
   mcpServer.tool(
     'enable_network_capture',
     `Habilita captura de TODAS as requisições HTTP/HTTPS da página.
@@ -31,14 +32,14 @@ QUANDO USAR:
 
 IMPORTANTE: Precisa recarregar a página após habilitar para capturar requests iniciais.`,
     {},
-    async () => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendCommandToBackground('enable_network_command', { sessionId });
+        const result = await bridgeServer.sendCommandToBackground('enable_network_command', { sessionId: session.browserSessionId });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -69,15 +70,15 @@ FILTROS DISPONÍVEIS:
       type: z.string().optional().describe('Filtra por tipo (XHR, Fetch, Document, etc.)'),
       limit: z.number().optional().describe('Máximo de logs a retornar (default: 100)')
     },
-    async (params) => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão ativa.' }] };
+    async (params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
         const result = await bridgeServer.sendCommandToBackground('get_network_logs_command', {
-          sessionId,
+          sessionId: session.browserSessionId,
           options: params
         });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
@@ -103,14 +104,14 @@ QUANDO USAR:
 - Capturar stack traces
 - Verificar mensagens de warning`,
     {},
-    async () => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendCommandToBackground('enable_console_command', { sessionId });
+        const result = await bridgeServer.sendCommandToBackground('enable_console_command', { sessionId: session.browserSessionId });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -137,15 +138,15 @@ FILTROS:
       textFilter: z.string().optional().describe('Filtra logs que contêm este texto'),
       limit: z.number().optional().describe('Máximo de logs a retornar (default: 100)')
     },
-    async (params) => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão ativa.' }] };
+    async (params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
         const result = await bridgeServer.sendCommandToBackground('get_console_logs_command', {
-          sessionId,
+          sessionId: session.browserSessionId,
           options: params
         });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
@@ -170,14 +171,14 @@ QUANDO USAR:
 - Analisar protocolos WebSocket
 - Debug de Socket.IO, SignalR, etc.`,
     {},
-    async () => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendCommandToBackground('enable_websocket_command', { sessionId });
+        const result = await bridgeServer.sendCommandToBackground('enable_websocket_command', { sessionId: session.browserSessionId });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -204,15 +205,15 @@ FILTROS:
       direction: z.enum(['sent', 'received']).optional().describe('Filtra por direção'),
       limit: z.number().optional().describe('Máximo de frames a retornar (default: 100)')
     },
-    async (params) => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão ativa.' }] };
+    async (params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
         const result = await bridgeServer.sendCommandToBackground('get_websocket_frames_command', {
-          sessionId,
+          sessionId: session.browserSessionId,
           options: params
         });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
@@ -237,14 +238,14 @@ QUANDO USAR:
 - Detectar memory leaks
 - Medir performance de renderização`,
     {},
-    async () => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendCommandToBackground('get_performance_metrics_command', { sessionId });
+        const result = await bridgeServer.sendCommandToBackground('get_performance_metrics_command', { sessionId: session.browserSessionId });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -273,15 +274,15 @@ RETORNA: Resultado da expressão JavaScript.`,
       awaitPromise: z.boolean().optional().describe('Aguardar se for Promise (default: true)'),
       returnByValue: z.boolean().optional().describe('Retornar valor serializado (default: true)')
     },
-    async ({ expression, awaitPromise, returnByValue }) => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão ativa.' }] };
+    async ({ expression, awaitPromise, returnByValue }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
         const result = await bridgeServer.sendCommandToBackground('evaluate_command', {
-          sessionId,
+          sessionId: session.browserSessionId,
           expression,
           options: { awaitPromise, returnByValue }
         });
@@ -304,15 +305,15 @@ TIPOS:
     {
       logType: z.enum(['all', 'network', 'console', 'websocket']).optional().describe('Tipo de log a limpar (default: all)')
     },
-    async ({ logType }) => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão ativa.' }] };
+    async ({ logType }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
         const result = await bridgeServer.sendCommandToBackground('clear_logs_command', {
-          sessionId,
+          sessionId: session.browserSessionId,
           type: logType || 'all'
         });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
@@ -331,14 +332,14 @@ RETORNA:
 - networkEnabled, consoleEnabled, wsEnabled
 - Contagem de logs de cada tipo`,
     {},
-    async () => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendCommandToBackground('get_debugger_status_command', { sessionId });
+        const result = await bridgeServer.sendCommandToBackground('get_debugger_status_command', { sessionId: session.browserSessionId });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -368,15 +369,15 @@ CUIDADO: Pode afetar funcionamento da página.`,
         urlPattern: z.string()
       })).optional().describe('Padrões de URL para interceptar')
     },
-    async ({ enabled, patterns }) => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão ativa.' }] };
+    async ({ enabled, patterns }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
         const result = await bridgeServer.sendCommandToBackground('set_request_interception_command', {
-          sessionId,
+          sessionId: session.browserSessionId,
           enabled: enabled !== false,
           patterns
         });
@@ -429,13 +430,14 @@ CUIDADO: Scripts malformados podem quebrar a página.`,
       script: z.string().describe('Código JavaScript a executar na página'),
       args: z.record(z.any()).optional().describe('Argumentos para passar ao script (acessíveis via args)')
     },
-    async ({ script, args }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ script, args }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'execute_script', data: { script, args } }, 30000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'execute_script', data: { script, args } }, 30000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro ao executar script: ${(error as Error).message}` }] };

@@ -21,8 +21,9 @@ import {
   SelectOptionSchema,
   TypeTextSchema
 } from '../schemas/index.js';
+import { SessionManager, getSessionOrError } from '../session-manager.js';
 
-export function registerInteractionTools(mcpServer: McpServer, bridgeServer: BridgeServer) {
+export function registerInteractionTools(mcpServer: McpServer, bridgeServer: BridgeServer, sessionManager: SessionManager) {
   mcpServer.tool(
     'fill_field',
     `Fill a form field.
@@ -36,15 +37,16 @@ INPUT:
       label: z.string().optional().describe('Label text'),
       value: z.string().describe('Value to fill')
     },
-    async (params) => {
+    async (params, extra) => {
       FillFieldSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'fill_field', data: params }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'fill_field', data: params }, 10000);
         return { content: [{ type: 'text', text: `Filled: ${JSON.stringify(result)}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -62,15 +64,16 @@ INPUT:
         value: z.string()
       })).describe('Array de campos com selector/label e value')
     },
-    async ({ fields }) => {
+    async ({ fields }, extra) => {
       FillFormSchema.parse({ fields });
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'fill_form', data: { fields } }, 15000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'fill_form', data: { fields } }, 15000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro ao preencher formulário: ${(error as Error).message}` }] };
@@ -91,15 +94,16 @@ INPUT (provide ONE):
       text: z.string().optional().describe('Visible text'),
       clickParent: z.boolean().optional()
     },
-    async (params) => {
+    async (params, extra) => {
       ClickElementSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'click_element', data: params }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'click_element', data: params }, 10000);
         return { content: [{ type: 'text', text: `Clicked: ${JSON.stringify(result)}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -117,13 +121,14 @@ INPUT (provide ONE):
       selector: z.string().optional().describe('Seletor CSS do elemento'),
       text: z.string().optional().describe('Texto visível do elemento')
     },
-    async (params) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'double_click', data: params }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'double_click', data: params }, 10000);
         return { content: [{ type: 'text', text: `Clique duplo: ${JSON.stringify(result)}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -140,15 +145,16 @@ INPUT (provide ONE):
       value: z.string().optional().describe('Valor (value) da opção'),
       text: z.string().optional().describe('Texto visível da opção')
     },
-    async (params) => {
+    async (params, extra) => {
       SelectOptionSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'select_option', data: params }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'select_option', data: params }, 10000);
         return { content: [{ type: 'text', text: `Opção selecionada: ${JSON.stringify(result)}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro ao selecionar: ${(error as Error).message}` }] };
@@ -186,15 +192,16 @@ focus_element (optional) -> type_text -> wait for autocomplete -> click suggesti
       text: z.string().describe('Text to type'),
       delay: z.number().optional().describe('Delay between keystrokes in ms (default: 50)')
     },
-    async (params) => {
+    async (params, extra) => {
       TypeTextSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'type_text', data: params }, 30000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'type_text', data: params }, 30000);
         return { content: [{ type: 'text', text: `Text typed: ${JSON.stringify(result)}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error typing: ${(error as Error).message}` }] };
@@ -208,13 +215,14 @@ focus_element (optional) -> type_text -> wait for autocomplete -> click suggesti
     {
       selector: z.string().describe('Seletor CSS do elemento')
     },
-    async ({ selector }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ selector }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'hover_element', data: { selector } }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'hover_element', data: { selector } }, 10000);
         return { content: [{ type: 'text', text: `Hover realizado: ${JSON.stringify(result)}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro no hover: ${(error as Error).message}` }] };
@@ -230,15 +238,16 @@ focus_element (optional) -> type_text -> wait for autocomplete -> click suggesti
       x: z.number().optional().describe('Posição X em pixels'),
       y: z.number().optional().describe('Posição Y em pixels')
     },
-    async ({ selector, x, y }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ selector, x, y }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       const data = selector ? { selector } : { position: { x, y } };
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'scroll_to', data }, 5000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'scroll_to', data }, 5000);
         return { content: [{ type: 'text', text: `Scroll realizado: ${JSON.stringify(result)}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro no scroll: ${(error as Error).message}` }] };
@@ -275,13 +284,14 @@ EXEMPLOS:
         meta: z.boolean().optional()
       }).optional().describe('Modificadores (ctrl, shift, alt, meta)')
     },
-    async ({ key, selector, modifiers }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ key, selector, modifiers }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'press_key', data: { key, selector, modifiers } }, 5000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'press_key', data: { key, selector, modifiers } }, 5000);
         return { content: [{ type: 'text', text: `Tecla pressionada: ${JSON.stringify(result)}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro ao pressionar tecla: ${(error as Error).message}` }] };
@@ -295,13 +305,14 @@ EXEMPLOS:
     {
       selector: z.string().describe('Seletor CSS do elemento')
     },
-    async ({ selector }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ selector }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'focus_element', data: { selector } }, 5000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'focus_element', data: { selector } }, 5000);
         return { content: [{ type: 'text', text: `Elemento focado: ${JSON.stringify(result)}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -313,13 +324,14 @@ EXEMPLOS:
     'get_active_element',
     `Retorna informações sobre o elemento atualmente focado na página.`,
     {},
-    async () => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_active_element', data: {} }, 5000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_active_element', data: {} }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -349,13 +361,14 @@ EXEMPLO:
     {
       selector: z.string().describe('Seletor CSS do elemento')
     },
-    async ({ selector }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ selector }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_element_info', data: { selector } }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_element_info', data: { selector } }, 10000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };

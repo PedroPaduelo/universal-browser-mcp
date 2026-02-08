@@ -16,8 +16,9 @@ import {
   ExtractHtmlSchema,
   ValidatePageSchema
 } from '../schemas/index.js';
+import { SessionManager, getSessionOrError } from '../session-manager.js';
 
-export function registerExtractionTools(mcpServer: McpServer, bridgeServer: BridgeServer) {
+export function registerExtractionTools(mcpServer: McpServer, bridgeServer: BridgeServer, sessionManager: SessionManager) {
   mcpServer.tool(
     'extract_text',
     `Extract text content from a specific element.
@@ -38,15 +39,16 @@ EXAMPLE:
     {
       selector: z.string().describe('CSS selector of the element')
     },
-    async ({ selector }) => {
+    async ({ selector }, extra) => {
       ExtractTextSchema.parse({ selector });
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'extract_text', data: { selector } }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'extract_text', data: { selector } }, 10000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -81,15 +83,16 @@ EXAMPLE:
     {
       selector: z.string().optional().describe('CSS selector of the table (default: first table)')
     },
-    async ({ selector }) => {
+    async ({ selector }, extra) => {
       ExtractTableSchema.parse({ selector });
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'extract_table', data: { selector } }, 15000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'extract_table', data: { selector } }, 15000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -104,13 +107,14 @@ EXAMPLE:
       selector: z.string().optional().describe('Seletor do container (padrão: página toda)'),
       limit: z.number().optional().describe('Máximo de links (padrão: 100)')
     },
-    async ({ selector, limit }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ selector, limit }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'extract_links', data: { selector, limit } }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'extract_links', data: { selector, limit } }, 10000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -124,13 +128,14 @@ EXAMPLE:
     {
       selector: z.string().optional().describe('Seletor do formulário (padrão: primeiro form)')
     },
-    async ({ selector }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ selector }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'extract_form_data', data: { selector } }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'extract_form_data', data: { selector } }, 10000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -147,15 +152,16 @@ EXAMPLE:
       includeInline: z.boolean().optional().describe('Incluir estilos inline (padrão: true)'),
       includeClasses: z.boolean().optional().describe('Incluir classes CSS (padrão: true)')
     },
-    async (params) => {
+    async (params, extra) => {
       ExtractStylesSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'extract_styles', data: params }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'extract_styles', data: params }, 10000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -170,15 +176,16 @@ EXAMPLE:
       selector: z.string().optional().describe('Seletor CSS do elemento (padrão: html)'),
       outerHtml: z.boolean().optional().describe('Incluir elemento wrapper (true) ou só conteúdo interno (false)')
     },
-    async (params) => {
+    async (params, extra) => {
       ExtractHtmlSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'extract_html', data: params }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'extract_html', data: params }, 10000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -199,15 +206,16 @@ EXAMPLE:
         description: z.string().optional().describe('Descrição da regra para o relatório')
       })).optional().describe('Lista de regras de validação')
     },
-    async (params) => {
+    async (params, extra) => {
       ValidatePageSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'validate_page', data: params }, 30000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'validate_page', data: params }, 30000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
@@ -219,13 +227,14 @@ EXAMPLE:
     'get_stylesheets',
     'Lista todas as folhas de estilo (CSS) carregadas na página.',
     {},
-    async () => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_stylesheets', data: {} }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_stylesheets', data: {} }, 10000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };

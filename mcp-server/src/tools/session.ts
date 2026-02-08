@@ -3,17 +3,18 @@
  * - create_automation_session
  * - close_automation_session
  * - get_automation_status
+ * - get_connection_status
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BridgeServer } from '../websocket/bridge-server.js';
+import { SessionManager, getSessionOrError } from '../session-manager.js';
 
 export function registerSessionTools(
   mcpServer: McpServer,
   bridgeServer: BridgeServer,
-  instanceSessionId: string,
-  fixedSessionId: string
+  sessionManager: SessionManager
 ) {
   mcpServer.tool(
     'create_automation_session',
@@ -36,17 +37,21 @@ INPUT:
     {
       url: z.string().url().optional().describe('Initial URL to open (default: about:blank)')
     },
-    async ({ url }) => {
-      const sessionId = fixedSessionId;
+    async ({ url }, extra) => {
+      const mcpSessionId = extra.sessionId;
+      if (!mcpSessionId) {
+        return { content: [{ type: 'text', text: 'Error: No MCP session ID available.' }] };
+      }
 
-      // Se já tem sessão ativa e conectada, reutiliza
-      if (bridgeServer.getCurrentSession() === sessionId && bridgeServer.isSessionConnected(sessionId)) {
+      // If this MCP session already has a browser session, reuse it
+      const existingBrowserSessionId = sessionManager.getBrowserSessionId(mcpSessionId);
+      if (existingBrowserSessionId && bridgeServer.isSessionConnected(existingBrowserSessionId)) {
         return {
           content: [{
             type: 'text',
             text: JSON.stringify({
               success: true,
-              sessionId,
+              sessionId: existingBrowserSessionId,
               reused: true,
               message: 'Reusing existing automation session.',
               tip: 'Use navigate_to to go to a different URL.'
@@ -55,7 +60,9 @@ INPUT:
         };
       }
 
-      bridgeServer.setCurrentSession(sessionId);
+      // Create a new browser session for this MCP session
+      const browserSessionId = sessionManager.createBrowserSession(mcpSessionId);
+      bridgeServer.setCurrentSession(browserSessionId);
 
       if (!bridgeServer.isBackgroundConnected()) {
         return {
@@ -71,7 +78,7 @@ INPUT:
 
       try {
         const result = await Promise.race([
-          bridgeServer.createSessionViaBackground(sessionId, url),
+          bridgeServer.createSessionViaBackground(browserSessionId, url),
           new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
         ]) as { success?: boolean; error?: string; windowId?: number; activeTabId?: number; message?: string };
 
@@ -81,7 +88,7 @@ INPUT:
               type: 'text',
               text: JSON.stringify({
                 success: true,
-                sessionId,
+                sessionId: browserSessionId,
                 windowId: result?.windowId,
                 tabId: result?.activeTabId,
                 message: result?.message || 'Session ready'
@@ -108,7 +115,7 @@ INPUT:
               type: 'text',
               text: JSON.stringify({
                 success: true,
-                sessionId,
+                sessionId: browserSessionId,
                 message: 'Session creation initiated. Window should be open.',
                 tip: 'If window is not visible, check Chrome. Use navigate_to to continue.'
               }, null, 2)
@@ -133,10 +140,14 @@ INPUT:
     'close_automation_session',
     'Fecha a sessão de automação atual e a janela dedicada.',
     {},
-    async () => {
-      const sessionId = bridgeServer.getCurrentSession();
+    async (_params, extra) => {
+      const mcpSessionId = extra.sessionId;
+      if (!mcpSessionId) {
+        return { content: [{ type: 'text', text: 'Error: No MCP session ID available.' }] };
+      }
+      const browserSessionId = sessionManager.getBrowserSessionId(mcpSessionId);
 
-      if (!sessionId) {
+      if (!browserSessionId) {
         return {
           content: [{
             type: 'text',
@@ -146,14 +157,14 @@ INPUT:
       }
 
       try {
-        bridgeServer.setCurrentSession('');
+        sessionManager.removeSession(mcpSessionId);
 
         return {
           content: [{
             type: 'text',
             text: JSON.stringify({
               success: true,
-              closedSession: sessionId,
+              closedSession: browserSessionId,
               message: 'Sessão encerrada. Você pode criar uma nova com create_automation_session.'
             }, null, 2)
           }]
@@ -173,8 +184,9 @@ INPUT:
     'get_automation_status',
     'Retorna o status da sessão de automação atual e todas as sessões conectadas.',
     {},
-    async () => {
-      const currentSession = bridgeServer.getCurrentSession();
+    async (_params, extra) => {
+      const mcpSessionId = extra.sessionId ?? 'unknown';
+      const browserSessionId = sessionManager.getBrowserSessionId(mcpSessionId);
       const connectedSessions = bridgeServer.getConnectedSessions();
       const sessionsInfo = bridgeServer.getSessionsInfo();
       const backgroundConnected = bridgeServer.isBackgroundConnected();
@@ -184,19 +196,19 @@ INPUT:
         content: [{
           type: 'text',
           text: JSON.stringify({
-            instanceId: instanceSessionId,
+            mcpSessionId,
+            browserSessionId,
             mode: isServerMode ? 'server' : 'client',
-            currentSession,
-            isConnected: currentSession ? bridgeServer.isSessionConnected(currentSession) : false,
+            isConnected: browserSessionId ? bridgeServer.isSessionConnected(browserSessionId) : false,
             backgroundConnected,
             totalConnections: bridgeServer.getConnectionCount(),
-            mcpClientsConnected: isServerMode ? bridgeServer.getMcpClientCount() : 0,
+            activeMcpSessions: sessionManager.getActiveCount(),
             connectedSessions,
             sessionsInfo,
             message: !backgroundConnected
               ? 'Extensão não conectada. Abra o Chrome e verifique a extensão Universal Browser MCP.'
-              : currentSession
-                ? (bridgeServer.isSessionConnected(currentSession)
+              : browserSessionId
+                ? (bridgeServer.isSessionConnected(browserSessionId)
                   ? `Sessão ativa e conectada! (modo: ${isServerMode ? 'servidor' : 'cliente'})`
                   : 'Sessão configurada mas aguardando conexão do browser')
                 : 'Extensão conectada. Use create_automation_session para começar.'
@@ -210,9 +222,10 @@ INPUT:
     'get_connection_status',
     'Verifica o status da conexão com o browser e a sessão de automação atual.',
     {},
-    async () => {
-      const currentSession = bridgeServer.getCurrentSession();
-      const isConnected = bridgeServer.isConnected();
+    async (_params, extra) => {
+      const mcpSessionId = extra.sessionId ?? 'unknown';
+      const browserSessionId = sessionManager.getBrowserSessionId(mcpSessionId);
+      const isConnected = browserSessionId ? bridgeServer.isSessionConnected(browserSessionId) : false;
       const connectedSessions = bridgeServer.getConnectedSessions();
       const isServerMode = bridgeServer.isServer();
 
@@ -220,16 +233,16 @@ INPUT:
         content: [{
           type: 'text',
           text: JSON.stringify({
-            instanceId: instanceSessionId,
+            mcpSessionId,
+            browserSessionId,
             mode: isServerMode ? 'server' : 'client',
-            currentSession,
             isConnected,
             totalConnections: bridgeServer.getConnectionCount(),
             connectedSessions,
             message: isConnected
-              ? `Conectado à sessão ${currentSession}. Pronto para automação! (modo: ${isServerMode ? 'servidor' : 'cliente'})`
-              : currentSession
-              ? `Sessão ${currentSession} configurada mas aguardando conexão do browser.`
+              ? `Conectado à sessão ${browserSessionId}. Pronto para automação! (modo: ${isServerMode ? 'servidor' : 'cliente'})`
+              : browserSessionId
+              ? `Sessão ${browserSessionId} configurada mas aguardando conexão do browser.`
               : 'Nenhuma sessão ativa. Use create_automation_session para começar.'
           }, null, 2)
         }]
