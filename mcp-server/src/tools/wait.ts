@@ -47,11 +47,11 @@ INPUT:
 
   mcpServer.tool(
     'wait_for_text',
-    'Aguarda até que um texto específico apareça na página.',
+    'Wait for specific text to appear on the page.',
     {
-      text: z.string().describe('Texto a aguardar'),
-      selector: z.string().optional().describe('Seletor do container (opcional)'),
-      timeout: z.number().optional().describe('Timeout em ms (padrão: 10000, máximo: 60000)')
+      text: z.string().describe('Text to wait for'),
+      selector: z.string().optional().describe('Container selector (optional)'),
+      timeout: z.number().optional().describe('Timeout in ms (default: 10000, max: 60000)')
     },
     async ({ text, selector, timeout }, extra) => {
       const effectiveTimeout = Math.min(timeout || 10000, 60000);
@@ -70,18 +70,18 @@ INPUT:
           { type: 'wait_for_text', data: { text, selector, timeout: effectiveTimeout } },
           bridgeTimeout
         );
-        return { content: [{ type: 'text', text: `Texto encontrado: ${JSON.stringify(result)}` }] };
+        return { content: [{ type: 'text', text: `Text found: ${JSON.stringify(result)}` }] };
       } catch (error) {
         const errorMsg = (error as Error).message;
         if (errorMsg.includes('timeout') || errorMsg.includes('Timeout')) {
           return {
             content: [{
               type: 'text',
-              text: `Timeout aguardando texto "${text}" (${effectiveTimeout}ms). Verifique se o texto existe na página.`
+              text: `Timeout waiting for text "${text}" (${effectiveTimeout}ms). Check if the text exists on the page.`
             }]
           };
         }
-        return { content: [{ type: 'text', text: `Erro: ${errorMsg}` }] };
+        return { content: [{ type: 'text', text: `Error: ${errorMsg}` }] };
       }
     }
   );

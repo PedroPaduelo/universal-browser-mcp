@@ -1,21 +1,28 @@
 /**
- * Handlers de diálogos (alert, confirm, prompt)
+ * Dialog handlers (alert, confirm, prompt)
+ * Intercepts native dialogs with restore capability
  */
 
-/**
- * Estado dos diálogos
- */
 let lastDialog = null;
 let dialogQueue = [];
 let autoAcceptDialogs = true;
 
+// Store original functions for restoration
+let originalAlert = null;
+let originalConfirm = null;
+let originalPrompt = null;
+let isIntercepting = false;
+
 /**
- * Intercepta diálogos nativos
+ * Intercept native dialogs
  */
 export function interceptDialogs(sessionId, sendMessage) {
-  const originalAlert = window.alert.bind(window);
-  const originalConfirm = window.confirm.bind(window);
-  const originalPrompt = window.prompt.bind(window);
+  if (isIntercepting) return;
+  isIntercepting = true;
+
+  originalAlert = window.alert.bind(window);
+  originalConfirm = window.confirm.bind(window);
+  originalPrompt = window.prompt.bind(window);
 
   window.alert = function(message) {
     console.log('[Universal MCP] Alert intercepted:', message);
@@ -91,7 +98,25 @@ export function interceptDialogs(sessionId, sendMessage) {
 }
 
 /**
- * Handler para obter último diálogo
+ * Stop intercepting dialogs and restore original functions
+ */
+export function stopInterceptingDialogs() {
+  if (!isIntercepting) return;
+
+  if (originalAlert) window.alert = originalAlert;
+  if (originalConfirm) window.confirm = originalConfirm;
+  if (originalPrompt) window.prompt = originalPrompt;
+
+  originalAlert = null;
+  originalConfirm = null;
+  originalPrompt = null;
+  isIntercepting = false;
+
+  console.log('[Universal MCP] Dialog interception disabled, originals restored');
+}
+
+/**
+ * Handler for getting the last dialog
  */
 export function handleGetLastDialog() {
   return {
@@ -101,7 +126,7 @@ export function handleGetLastDialog() {
 }
 
 /**
- * Handler para obter fila de diálogos
+ * Handler for getting the dialog queue
  */
 export function handleGetDialogQueue() {
   return {
@@ -112,7 +137,7 @@ export function handleGetDialogQueue() {
 }
 
 /**
- * Handler para limpar fila de diálogos
+ * Handler for clearing the dialog queue
  */
 export function handleClearDialogQueue() {
   const count = dialogQueue.length;
@@ -125,7 +150,7 @@ export function handleClearDialogQueue() {
 }
 
 /**
- * Handler para configurar auto-aceite
+ * Handler for configuring auto-accept
  */
 export function handleSetDialogAutoAccept(data) {
   const { enabled } = data;

@@ -45,7 +45,7 @@ WORKFLOW: navigate_to -> wait_for_element -> get_page_info`,
 
   mcpServer.tool(
     'go_back',
-    'Volta para a página anterior no histórico do browser.',
+    'Navigate back to the previous page in browser history.',
     {},
     async (_params, extra) => {
       const session = getSessionOrError(sessionManager, extra.sessionId);
@@ -56,13 +56,13 @@ WORKFLOW: navigate_to -> wait_for_element -> get_page_info`,
       try {
         await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'go_back', data: {} }, 5000);
       } catch { /* ignore timeout */ }
-      return { content: [{ type: 'text', text: 'Voltando para página anterior...' }] };
+      return { content: [{ type: 'text', text: 'Navigating back to previous page...' }] };
     }
   );
 
   mcpServer.tool(
     'go_forward',
-    'Avança para a próxima página no histórico do browser.',
+    'Navigate forward to the next page in browser history.',
     {},
     async (_params, extra) => {
       const session = getSessionOrError(sessionManager, extra.sessionId);
@@ -73,13 +73,13 @@ WORKFLOW: navigate_to -> wait_for_element -> get_page_info`,
       try {
         await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'go_forward', data: {} }, 5000);
       } catch { /* ignore timeout */ }
-      return { content: [{ type: 'text', text: 'Avançando para próxima página...' }] };
+      return { content: [{ type: 'text', text: 'Navigating forward to next page...' }] };
     }
   );
 
   mcpServer.tool(
     'refresh',
-    'Recarrega a página atual.',
+    'Reload the current page.',
     {},
     async (_params, extra) => {
       const session = getSessionOrError(sessionManager, extra.sessionId);
@@ -90,13 +90,13 @@ WORKFLOW: navigate_to -> wait_for_element -> get_page_info`,
       try {
         await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'refresh', data: {} }, 5000);
       } catch { /* ignore timeout */ }
-      return { content: [{ type: 'text', text: 'Recarregando página...' }] };
+      return { content: [{ type: 'text', text: 'Reloading page...' }] };
     }
   );
 
   mcpServer.tool(
     'get_current_url',
-    'Retorna a URL atual da página na sessão de automação.',
+    'Returns the current page URL in the automation session.',
     {},
     async (_params, extra) => {
       const session = getSessionOrError(sessionManager, extra.sessionId);

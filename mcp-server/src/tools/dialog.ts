@@ -14,7 +14,7 @@ import { SessionManager, getSessionOrError } from '../session-manager.js';
 export function registerDialogTools(mcpServer: McpServer, bridgeServer: BridgeServer, sessionManager: SessionManager) {
   mcpServer.tool(
     'get_last_dialog',
-    'Retorna o último dialog (alert/confirm/prompt) que apareceu na página. Útil para verificar mensagens de alerta.',
+    'Returns the last dialog (alert/confirm/prompt) that appeared on the page. Useful for checking alert messages.',
     {},
     async (_params, extra) => {
       const session = getSessionOrError(sessionManager, extra.sessionId);
@@ -26,14 +26,14 @@ export function registerDialogTools(mcpServer: McpServer, bridgeServer: BridgeSe
         const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_last_dialog', data: {} }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'get_dialog_queue',
-    'Retorna todos os dialogs (alert/confirm/prompt) que apareceram desde o último clear. Útil para ver histórico de alertas.',
+    'Returns all dialogs (alert/confirm/prompt) that appeared since the last clear. Useful for viewing alert history.',
     {},
     async (_params, extra) => {
       const session = getSessionOrError(sessionManager, extra.sessionId);
@@ -45,14 +45,14 @@ export function registerDialogTools(mcpServer: McpServer, bridgeServer: BridgeSe
         const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_dialog_queue', data: {} }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'clear_dialog_queue',
-    'Limpa a fila de dialogs capturados.',
+    'Clear the captured dialog queue.',
     {},
     async (_params, extra) => {
       const session = getSessionOrError(sessionManager, extra.sessionId);
@@ -64,16 +64,16 @@ export function registerDialogTools(mcpServer: McpServer, bridgeServer: BridgeSe
         const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'clear_dialog_queue', data: {} }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'set_dialog_auto_accept',
-    'Configura se dialogs (alert/confirm/prompt) devem ser aceitos automaticamente. Por padrão está habilitado para automação.',
+    'Configure whether dialogs (alert/confirm/prompt) should be automatically accepted. Enabled by default for automation.',
     {
-      enabled: z.boolean().describe('true para aceitar automaticamente, false para bloquear')
+      enabled: z.boolean().describe('true to auto-accept, false to block')
     },
     async ({ enabled }, extra) => {
       const session = getSessionOrError(sessionManager, extra.sessionId);
@@ -85,7 +85,7 @@ export function registerDialogTools(mcpServer: McpServer, bridgeServer: BridgeSe
         const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'set_dialog_auto_accept', data: { enabled } }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );

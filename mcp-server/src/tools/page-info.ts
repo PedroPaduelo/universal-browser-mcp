@@ -44,7 +44,7 @@ INPUT (all optional):
 
   mcpServer.tool(
     'get_page_title',
-    'Retorna o título da página atual.',
+    'Returns the current page title.',
     {},
     async (_params, extra) => {
       const session = getSessionOrError(sessionManager, extra.sessionId);
@@ -63,9 +63,9 @@ INPUT (all optional):
 
   mcpServer.tool(
     'get_page_text',
-    'Retorna todo o texto visível da página ou de um elemento específico.',
+    'Returns all visible text from the page or a specific element.',
     {
-      selector: z.string().optional().describe('Seletor CSS do elemento (opcional, padrão: body)')
+      selector: z.string().optional().describe('CSS selector of the element (optional, default: body)')
     },
     async ({ selector }, extra) => {
       const session = getSessionOrError(sessionManager, extra.sessionId);

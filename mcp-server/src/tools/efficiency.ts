@@ -315,31 +315,31 @@ WHEN TO USE:
 
   mcpServer.tool(
     'take_screenshot',
-    `Captura um screenshot da página atual e salva em arquivo.
+    `Capture a screenshot of the current page and save to file.
 
-PARÂMETROS:
-- savePath: Caminho completo onde salvar o arquivo (ex: /tmp/screenshot.jpg)
-- format: 'jpeg' ou 'png' (padrão: 'jpeg' - menor tamanho)
-- quality: 1-100 para JPEG (padrão: 50 - bom balanço qualidade/tamanho)
+PARAMETERS:
+- savePath: Full path to save the file (e.g., /tmp/screenshot.jpg)
+- format: "jpeg" or "png" (default: "jpeg" - smaller size)
+- quality: 1-100 for JPEG (default: 50 - good quality/size balance)
 
-RETORNA:
-- savedPath: Caminho do arquivo salvo
-- size: Tamanho em bytes
+RETURNS:
+- savedPath: Path of saved file
+- size: Size in bytes
 
-ÚTIL PARA:
-- Documentar estado da página
-- Debug visual
-- Verificar layout
+USEFUL FOR:
+- Documenting page state
+- Visual debugging
+- Verifying layout
 
-DICA: Use quality baixo (30-50) para screenshots de debug, alto (80-100) para documentação.`,
+TIP: Use low quality (30-50) for debug screenshots, high (80-100) for documentation.`,
     {
-      savePath: z.string().describe('Caminho completo onde salvar o screenshot (ex: /tmp/screenshot.jpg)'),
-      format: z.enum(['jpeg', 'png']).optional().describe('Formato da imagem: jpeg (menor) ou png (sem perda). Padrão: jpeg'),
-      quality: z.number().min(1).max(100).optional().describe('Qualidade JPEG 1-100. Padrão: 50. Ignorado para PNG.')
+      savePath: z.string().describe('Full path to save the screenshot (e.g., /tmp/screenshot.jpg)'),
+      format: z.enum(['jpeg', 'png']).optional().describe('Image format: jpeg (smaller) or png (lossless). Default: jpeg'),
+      quality: z.number().min(1).max(100).optional().describe('JPEG quality 1-100. Default: 50. Ignored for PNG.')
     },
     async ({ savePath, format, quality }, extra) => {
       if (!bridgeServer.isBackgroundConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Extensão não conectada.' }] };
+        return { content: [{ type: 'text', text: 'Error: Extension not connected.' }] };
       }
 
       const session = getSessionOrError(sessionManager, extra.sessionId);
@@ -355,17 +355,17 @@ DICA: Use quality baixo (30-50) para screenshots de debug, alto (80-100) para do
         }) as { success: boolean; dataUrl?: string; error?: string };
 
         if (!result.success || !result.dataUrl) {
-          return { content: [{ type: 'text', text: `Erro: ${result.error || 'Screenshot falhou'}` }] };
+          return { content: [{ type: 'text', text: `Error: ${result.error || 'Screenshot failed'}` }] };
         }
 
-        // Extrair dados base64 do dataUrl (formato: data:image/jpeg;base64,XXXX)
+        // Extract base64 data from dataUrl (format: data:image/jpeg;base64,XXXX)
         const base64Data = result.dataUrl.replace(/^data:image\/\w+;base64,/, '');
         const buffer = Buffer.from(base64Data, 'base64');
 
-        // Criar diretório se não existir
+        // Create directory if it doesn't exist
         await mkdir(dirname(savePath), { recursive: true });
 
-        // Salvar arquivo
+        // Save file
         await writeFile(savePath, buffer);
 
         return {
@@ -382,7 +382,7 @@ DICA: Use quality baixo (30-50) para screenshots de debug, alto (80-100) para do
           }]
         };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro ao capturar screenshot: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error capturing screenshot: ${(error as Error).message}` }] };
       }
     }
   );
