@@ -20,6 +20,7 @@ import { BridgeServer } from './websocket/bridge-server.js';
 import { SessionManager } from './session-manager.js';
 import { randomUUID } from 'crypto';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
+import { readFile, unlink } from 'fs/promises';
 
 // Import tool registration functions
 import {
@@ -355,6 +356,39 @@ async function main() {
       }
 
       await sseTransports[sseSessionId].handlePostMessage(req, res, parsedBody);
+      return;
+    }
+
+    // ==================== SCREENSHOTS ENDPOINT ====================
+
+    if (url.pathname.startsWith('/screenshots/') && req.method === 'GET') {
+      const filename = url.pathname.slice('/screenshots/'.length);
+
+      // Sanitize: only allow uuid.ext format
+      if (!/^[a-f0-9\-]+\.(jpg|png)$/.test(filename)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid filename' }));
+        return;
+      }
+
+      const filePath = `/tmp/screenshots/${filename}`;
+      const mimeType = filename.endsWith('.png') ? 'image/png' : 'image/jpeg';
+
+      try {
+        const data = await readFile(filePath);
+
+        res.writeHead(200, {
+          'Content-Type': mimeType,
+          'Content-Length': data.length,
+        });
+        res.end(data);
+
+        // Delete after serving
+        unlink(filePath).catch(() => {});
+      } catch {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Screenshot not found or already consumed' }));
+      }
       return;
     }
 

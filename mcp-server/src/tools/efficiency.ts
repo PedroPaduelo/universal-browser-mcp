@@ -13,7 +13,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BridgeServer } from '../websocket/bridge-server.js';
 import { writeFile, mkdir } from 'fs/promises';
-import { dirname } from 'path';
+import { randomUUID } from 'crypto';
 import {
   BatchActionsSchema,
   FindByRoleSchema,
@@ -315,29 +315,24 @@ WHEN TO USE:
 
   mcpServer.tool(
     'take_screenshot',
-    `Capture a screenshot of the current page and save to file.
+    `Capture a screenshot of the current page and get a temporary URL to view it.
 
 PARAMETERS:
-- savePath: Full path to save the file (e.g., /tmp/screenshot.jpg)
 - format: "jpeg" or "png" (default: "jpeg" - smaller size)
 - quality: 1-100 for JPEG (default: 50 - good quality/size balance)
 
 RETURNS:
-- savedPath: Path of saved file
+- screenshotUrl: Temporary URL to fetch the image (single-use, deleted after first access)
 - size: Size in bytes
 
-USEFUL FOR:
-- Documenting page state
-- Visual debugging
-- Verifying layout
+IMPORTANT: The returned URL is single-use. Once fetched, the image is deleted from the server.
 
 TIP: Use low quality (30-50) for debug screenshots, high (80-100) for documentation.`,
     {
-      savePath: z.string().describe('Full path to save the screenshot (e.g., /tmp/screenshot.jpg)'),
       format: z.enum(['jpeg', 'png']).optional().describe('Image format: jpeg (smaller) or png (lossless). Default: jpeg'),
       quality: z.number().min(1).max(100).optional().describe('JPEG quality 1-100. Default: 50. Ignored for PNG.')
     },
-    async ({ savePath, format, quality }, extra) => {
+    async ({ format, quality }, extra) => {
       if (!bridgeServer.isBackgroundConnected()) {
         return { content: [{ type: 'text', text: 'Error: Extension not connected.' }] };
       }
@@ -348,9 +343,10 @@ TIP: Use low quality (30-50) for debug screenshots, high (80-100) for documentat
       }
 
       try {
+        const imgFormat = format || 'jpeg';
         const result = await bridgeServer.sendCommandToBackground('take_screenshot_command', {
           sessionId: session.browserSessionId,
-          format: format || 'jpeg',
+          format: imgFormat,
           quality: quality || 50
         }) as { success: boolean; dataUrl?: string; error?: string };
 
@@ -362,18 +358,23 @@ TIP: Use low quality (30-50) for debug screenshots, high (80-100) for documentat
         const base64Data = result.dataUrl.replace(/^data:image\/\w+;base64,/, '');
         const buffer = Buffer.from(base64Data, 'base64');
 
-        // Create directory if it doesn't exist
-        await mkdir(dirname(savePath), { recursive: true });
+        // Save to temp file with UUID
+        const ext = imgFormat === 'png' ? 'png' : 'jpg';
+        const filename = `${randomUUID()}.${ext}`;
+        const screenshotDir = '/tmp/screenshots';
+        await mkdir(screenshotDir, { recursive: true });
+        await writeFile(`${screenshotDir}/${filename}`, buffer);
 
-        // Save file
-        await writeFile(savePath, buffer);
+        // Build URL
+        const baseUrl = process.env.PUBLIC_URL || `http://localhost:8080`;
+        const screenshotUrl = `${baseUrl}/screenshots/${filename}`;
 
         return {
           content: [{
             type: 'text',
             text: JSON.stringify({
               success: true,
-              savedPath: savePath,
+              screenshotUrl,
               size: buffer.length,
               sizeFormatted: buffer.length > 1024 * 1024
                 ? `${(buffer.length / (1024 * 1024)).toFixed(2)} MB`
