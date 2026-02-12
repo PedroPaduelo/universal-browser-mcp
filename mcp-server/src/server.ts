@@ -158,9 +158,18 @@ async function main() {
             transports[newSessionId] = transport;
             console.log(`[MCP] Client session created: ${newSessionId}`);
 
-            // Cleanup when transport closes
-            transport.onclose = () => {
+            // Cleanup when transport closes: also close the browser session
+            transport.onclose = async () => {
               console.log(`[MCP] Transport closed for session: ${newSessionId}`);
+              const browserSessionId = sessionManager.getBrowserSessionId(newSessionId);
+              if (browserSessionId && bridgeServer.isBackgroundConnected()) {
+                try {
+                  await bridgeServer.sendCommandToBackground('close_session_command', { sessionId: browserSessionId }, 5000);
+                  console.log(`[MCP] Browser session ${browserSessionId} closed for transport ${newSessionId}`);
+                } catch (e) {
+                  console.error(`[MCP] Failed to close browser session ${browserSessionId}:`, (e as Error).message);
+                }
+              }
               delete transports[newSessionId];
               sessionManager.removeSession(newSessionId);
             };
@@ -193,8 +202,17 @@ async function main() {
           transports[sessionId] = transport;
           console.log(`[MCP] Auto-recovered session: ${sessionId}`);
 
-          transport.onclose = () => {
+          transport.onclose = async () => {
             console.log(`[MCP] Transport closed for session: ${sessionId}`);
+            const browserSessionId = sessionManager.getBrowserSessionId(sessionId);
+            if (browserSessionId && bridgeServer.isBackgroundConnected()) {
+              try {
+                await bridgeServer.sendCommandToBackground('close_session_command', { sessionId: browserSessionId }, 5000);
+                console.log(`[MCP] Browser session ${browserSessionId} closed for transport ${sessionId}`);
+              } catch (e) {
+                console.error(`[MCP] Failed to close browser session ${browserSessionId}:`, (e as Error).message);
+              }
+            }
             delete transports[sessionId];
             sessionManager.removeSession(sessionId);
           };
@@ -320,8 +338,17 @@ async function main() {
 
       console.log(`[MCP] SSE session created: ${sseSessionId}`);
 
-      transport.onclose = () => {
+      transport.onclose = async () => {
         console.log(`[MCP] SSE transport closed: ${sseSessionId}`);
+        const browserSessionId = sessionManager.getBrowserSessionId(sseSessionId);
+        if (browserSessionId && bridgeServer.isBackgroundConnected()) {
+          try {
+            await bridgeServer.sendCommandToBackground('close_session_command', { sessionId: browserSessionId }, 5000);
+            console.log(`[MCP] Browser session ${browserSessionId} closed for SSE transport ${sseSessionId}`);
+          } catch (e) {
+            console.error(`[MCP] Failed to close browser session ${browserSessionId}:`, (e as Error).message);
+          }
+        }
         delete sseTransports[sseSessionId];
         sessionManager.removeSession(sseSessionId);
       };
