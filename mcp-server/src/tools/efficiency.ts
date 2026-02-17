@@ -13,7 +13,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BridgeServer } from '../websocket/bridge-server.js';
 import { writeFile, mkdir } from 'fs/promises';
-import { dirname } from 'path';
+import { randomUUID } from 'crypto';
 import {
   BatchActionsSchema,
   FindByRoleSchema,
@@ -21,8 +21,9 @@ import {
   RetryActionSchema,
   GetElementCenterSchema
 } from '../schemas/index.js';
+import { SessionManager, getSessionOrError } from '../session-manager.js';
 
-export function registerEfficiencyTools(mcpServer: McpServer, bridgeServer: BridgeServer) {
+export function registerEfficiencyTools(mcpServer: McpServer, bridgeServer: BridgeServer, sessionManager: SessionManager) {
   mcpServer.tool(
     'batch_actions',
     `Execute multiple browser actions in a single request.
@@ -67,16 +68,16 @@ OUTPUT:
       })).min(1).max(20).describe('Array of actions to execute'),
       stopOnError: z.boolean().optional().describe('Stop on first error (default: true)')
     },
-    async (params) => {
+    async (params, extra) => {
       BatchActionsSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        // Cap at 60s max to prevent infinite blocking
-        const result = await bridgeServer.sendAndWait({ type: 'batch_actions', data: params }, 60000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'batch_actions', data: params }, 60000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -121,13 +122,14 @@ EXAMPLE - Find all buttons:
       roles: z.array(z.string()).optional().describe('Filter by ARIA roles'),
       root: z.string().optional().describe('Root element selector (default: body)')
     },
-    async (params) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    async (params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_accessibility_tree', data: params }, 15000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_accessibility_tree', data: params }, 15000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -170,15 +172,16 @@ OUTPUT:
       role: z.string().describe('ARIA role to search for'),
       name: z.string().optional().describe('Filter by accessible name (partial match)')
     },
-    async (params) => {
+    async (params, extra) => {
       FindByRoleSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'find_by_role', data: params }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'find_by_role', data: params }, 10000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -205,15 +208,17 @@ WHEN TO USE:
       color: z.string().optional().describe('Highlight color (default: "red")'),
       duration: z.number().optional().describe('Duration in ms (default: 2000)')
     },
-    async (params) => {
+    async (params, extra) => {
       HighlightElementSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait(
+        const result = await bridgeServer.sendAndWaitToSession(
+          session.browserSessionId,
           { type: 'highlight_element', data: params },
           (params.duration || 2000) + 3000
         );
@@ -256,16 +261,17 @@ EXAMPLE:
       delayMs: z.number().optional().describe('Delay between attempts in ms (default: 1000)'),
       backoff: z.boolean().optional().describe('Use exponential backoff (default: false)')
     },
-    async (params) => {
+    async (params, extra) => {
       RetryActionSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
         const maxTime = (params.maxAttempts || 3) * (params.delayMs || 1000) * (params.backoff ? 4 : 1) + 30000;
-        const result = await bridgeServer.sendAndWait({ type: 'retry_action', data: params }, maxTime);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'retry_action', data: params }, maxTime);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -290,15 +296,16 @@ WHEN TO USE:
     {
       selector: z.string().describe('CSS selector of the element')
     },
-    async ({ selector }) => {
+    async ({ selector }, extra) => {
       GetElementCenterSchema.parse({ selector });
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_element_center', data: { selector } }, 5000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_element_center', data: { selector } }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -308,61 +315,66 @@ WHEN TO USE:
 
   mcpServer.tool(
     'take_screenshot',
-    `Captura um screenshot da página atual e salva em arquivo.
+    `Capture a screenshot of the current page and get a temporary URL to view it.
 
-PARÂMETROS:
-- savePath: Caminho completo onde salvar o arquivo (ex: /tmp/screenshot.jpg)
-- format: 'jpeg' ou 'png' (padrão: 'jpeg' - menor tamanho)
-- quality: 1-100 para JPEG (padrão: 50 - bom balanço qualidade/tamanho)
+PARAMETERS:
+- format: "jpeg" or "png" (default: "jpeg" - smaller size)
+- quality: 1-100 for JPEG (default: 50 - good quality/size balance)
 
-RETORNA:
-- savedPath: Caminho do arquivo salvo
-- size: Tamanho em bytes
+RETURNS:
+- screenshotUrl: Temporary URL to fetch the image (single-use, deleted after first access)
+- size: Size in bytes
 
-ÚTIL PARA:
-- Documentar estado da página
-- Debug visual
-- Verificar layout
+IMPORTANT: The returned URL is single-use. Once fetched, the image is deleted from the server.
 
-DICA: Use quality baixo (30-50) para screenshots de debug, alto (80-100) para documentação.`,
+TIP: Use low quality (30-50) for debug screenshots, high (80-100) for documentation.`,
     {
-      savePath: z.string().describe('Caminho completo onde salvar o screenshot (ex: /tmp/screenshot.jpg)'),
-      format: z.enum(['jpeg', 'png']).optional().describe('Formato da imagem: jpeg (menor) ou png (sem perda). Padrão: jpeg'),
-      quality: z.number().min(1).max(100).optional().describe('Qualidade JPEG 1-100. Padrão: 50. Ignorado para PNG.')
+      format: z.enum(['jpeg', 'png']).optional().describe('Image format: jpeg (smaller) or png (lossless). Default: jpeg'),
+      quality: z.number().min(1).max(100).optional().describe('JPEG quality 1-100. Default: 50. Ignored for PNG.')
     },
-    async ({ savePath, format, quality }) => {
+    async ({ format, quality }, extra) => {
       if (!bridgeServer.isBackgroundConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Extensão não conectada.' }] };
+        return { content: [{ type: 'text', text: 'Error: Extension not connected.' }] };
+      }
+
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const sessionId = bridgeServer.getCurrentSession();
+        const imgFormat = format || 'jpeg';
         const result = await bridgeServer.sendCommandToBackground('take_screenshot_command', {
-          sessionId,
-          format: format || 'jpeg',
+          sessionId: session.browserSessionId,
+          format: imgFormat,
           quality: quality || 50
         }) as { success: boolean; dataUrl?: string; error?: string };
 
         if (!result.success || !result.dataUrl) {
-          return { content: [{ type: 'text', text: `Erro: ${result.error || 'Screenshot falhou'}` }] };
+          return { content: [{ type: 'text', text: `Error: ${result.error || 'Screenshot failed'}` }] };
         }
 
-        // Extrair dados base64 do dataUrl (formato: data:image/jpeg;base64,XXXX)
+        // Extract base64 data from dataUrl (format: data:image/jpeg;base64,XXXX)
         const base64Data = result.dataUrl.replace(/^data:image\/\w+;base64,/, '');
         const buffer = Buffer.from(base64Data, 'base64');
 
-        // Criar diretório se não existir
-        await mkdir(dirname(savePath), { recursive: true });
+        // Save to temp file with UUID
+        const ext = imgFormat === 'png' ? 'png' : 'jpg';
+        const filename = `${randomUUID()}.${ext}`;
+        const screenshotDir = '/tmp/screenshots';
+        await mkdir(screenshotDir, { recursive: true });
+        await writeFile(`${screenshotDir}/${filename}`, buffer);
 
-        // Salvar arquivo
-        await writeFile(savePath, buffer);
+        // Build URL
+        const baseUrl = process.env.PUBLIC_URL || `http://localhost:8080`;
+        const screenshotUrl = `${baseUrl}/screenshots/${filename}`;
 
         return {
           content: [{
             type: 'text',
             text: JSON.stringify({
               success: true,
-              savedPath: savePath,
+              screenshotUrl,
               size: buffer.length,
               sizeFormatted: buffer.length > 1024 * 1024
                 ? `${(buffer.length / (1024 * 1024)).toFixed(2)} MB`
@@ -371,7 +383,7 @@ DICA: Use quality baixo (30-50) para screenshots de debug, alto (80-100) para do
           }]
         };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro ao capturar screenshot: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error capturing screenshot: ${(error as Error).message}` }] };
       }
     }
   );

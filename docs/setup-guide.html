@@ -339,6 +339,7 @@
 
     .method.get { background: #238636; color: #fff; }
     .method.post { background: #1f6feb; color: #fff; }
+    .method.delete { background: #da3633; color: #fff; }
 
     .tools-grid {
       display: grid;
@@ -514,12 +515,27 @@
           <tr>
             <td><code>/sse</code></td>
             <td><span class="method get">GET</span></td>
-            <td>Conexao SSE para clientes MCP</td>
+            <td>Conexao SSE para clientes MCP (compativel com todos os clientes)</td>
           </tr>
           <tr>
             <td><code>/messages</code></td>
             <td><span class="method post">POST</span></td>
-            <td>Envio de mensagens</td>
+            <td>Envio de mensagens via SSE transport</td>
+          </tr>
+          <tr>
+            <td><code>/mcp</code></td>
+            <td><span class="method post">POST</span></td>
+            <td>Streamable HTTP - initialize + requests (clientes modernos)</td>
+          </tr>
+          <tr>
+            <td><code>/mcp</code></td>
+            <td><span class="method get">GET</span></td>
+            <td>Streamable HTTP - stream server-initiated messages</td>
+          </tr>
+          <tr>
+            <td><code>/mcp</code></td>
+            <td><span class="method delete">DELETE</span></td>
+            <td>Streamable HTTP - encerrar sessao</td>
           </tr>
           <tr>
             <td><code>/health</code></td>
@@ -533,6 +549,11 @@
           </tr>
         </tbody>
       </table>
+
+      <div class="note">
+        <div class="note-title">Dois transportes suportados</div>
+        O servidor suporta <strong>SSE</strong> (compativel com todos os clientes MCP atuais) e <strong>Streamable HTTP</strong> (padrao moderno). Use <code style="color: #7ee787;">/sse</code> na configuracao dos clientes. Cada cliente recebe uma sessao isolada, permitindo multiplos clientes simultaneos sem conflitos.
+      </div>
     </section>
 
     <!-- Tools de Tabs -->
@@ -748,7 +769,7 @@ abra uma nova aba com github.com, e liste as abas abertas"</pre>
     </section>
 
     <footer>
-      <p>Universal Browser MCP &copy; 2024</p>
+      <p>Universal Browser MCP v3.0 &copy; 2025</p>
     </footer>
   </div>
 

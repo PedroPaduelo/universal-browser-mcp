@@ -10,8 +10,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BridgeServer } from '../websocket/bridge-server.js';
 import { WaitForTextSchema } from '../schemas/index.js';
+import { SessionManager, getSessionOrError } from '../session-manager.js';
 
-export function registerWaitTools(mcpServer: McpServer, bridgeServer: BridgeServer) {
+export function registerWaitTools(mcpServer: McpServer, bridgeServer: BridgeServer, sessionManager: SessionManager) {
   mcpServer.tool(
     'wait_for_element',
     `Wait for element to appear and be visible.
@@ -23,15 +24,17 @@ INPUT:
       selector: z.string().describe('CSS selector'),
       timeout: z.number().optional().describe('Timeout ms (default: 10000)')
     },
-    async ({ selector, timeout }) => {
+    async ({ selector, timeout }, extra) => {
       const effectiveTimeout = Math.min(timeout || 10000, 30000);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait(
+        const result = await bridgeServer.sendAndWaitToSession(
+          session.browserSessionId,
           { type: 'wait_for_element', data: { selector, timeout: effectiveTimeout } },
           effectiveTimeout + 2000
         );
@@ -44,39 +47,41 @@ INPUT:
 
   mcpServer.tool(
     'wait_for_text',
-    'Aguarda até que um texto específico apareça na página.',
+    'Wait for specific text to appear on the page.',
     {
-      text: z.string().describe('Texto a aguardar'),
-      selector: z.string().optional().describe('Seletor do container (opcional)'),
-      timeout: z.number().optional().describe('Timeout em ms (padrão: 10000, máximo: 60000)')
+      text: z.string().describe('Text to wait for'),
+      selector: z.string().optional().describe('Container selector (optional)'),
+      timeout: z.number().optional().describe('Timeout in ms (default: 10000, max: 60000)')
     },
-    async ({ text, selector, timeout }) => {
+    async ({ text, selector, timeout }, extra) => {
       const effectiveTimeout = Math.min(timeout || 10000, 60000);
       WaitForTextSchema.parse({ text, selector, timeout: effectiveTimeout });
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa. Use create_automation_session primeiro.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
         const bridgeTimeout = effectiveTimeout + 3000;
 
-        const result = await bridgeServer.sendAndWait(
+        const result = await bridgeServer.sendAndWaitToSession(
+          session.browserSessionId,
           { type: 'wait_for_text', data: { text, selector, timeout: effectiveTimeout } },
           bridgeTimeout
         );
-        return { content: [{ type: 'text', text: `Texto encontrado: ${JSON.stringify(result)}` }] };
+        return { content: [{ type: 'text', text: `Text found: ${JSON.stringify(result)}` }] };
       } catch (error) {
         const errorMsg = (error as Error).message;
         if (errorMsg.includes('timeout') || errorMsg.includes('Timeout')) {
           return {
             content: [{
               type: 'text',
-              text: `Timeout aguardando texto "${text}" (${effectiveTimeout}ms). Verifique se o texto existe na página.`
+              text: `Timeout waiting for text "${text}" (${effectiveTimeout}ms). Check if the text exists on the page.`
             }]
           };
         }
-        return { content: [{ type: 'text', text: `Erro: ${errorMsg}` }] };
+        return { content: [{ type: 'text', text: `Error: ${errorMsg}` }] };
       }
     }
   );
@@ -136,14 +141,16 @@ EXAMPLE - Wait for page load:
       timeout: z.number().optional().describe('Max wait in ms (default: 10000)'),
       pollInterval: z.number().optional().describe('Check interval in ms (default: 100)')
     },
-    async (params) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    async (params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
         const effectiveTimeout = Math.min(params.timeout || 10000, 60000);
-        const result = await bridgeServer.sendAndWait(
+        const result = await bridgeServer.sendAndWaitToSession(
+          session.browserSessionId,
           { type: 'smart_wait', data: { ...params, timeout: effectiveTimeout } },
           effectiveTimeout + 5000
         );
@@ -184,14 +191,16 @@ EXAMPLE:
       checkSpinners: z.boolean().optional().describe('Check for loading spinners (default: true)'),
       stabilityDuration: z.number().optional().describe('DOM stability duration in ms (default: 500)')
     },
-    async (params) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    async (params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
         const effectiveTimeout = Math.min(params.timeout || 30000, 60000);
-        const result = await bridgeServer.sendAndWait(
+        const result = await bridgeServer.sendAndWaitToSession(
+          session.browserSessionId,
           { type: 'page_ready', data: { ...params, timeout: effectiveTimeout } },
           effectiveTimeout + 5000
         );

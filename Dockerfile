@@ -1,0 +1,117 @@
+# ============================================
+# Stage 1: Build mcp-server and browser-extension
+# ============================================
+FROM node:22-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends zip && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Build mcp-server
+COPY mcp-server/package.json mcp-server/package-lock.json* mcp-server/
+COPY mcp-server/tsconfig.json mcp-server/
+COPY mcp-server/src/ mcp-server/src/
+RUN cd mcp-server && npm install && npm run build
+
+# Build browser-extension
+COPY browser-extension/package.json browser-extension/package-lock.json* browser-extension/
+COPY browser-extension/esbuild.config.js browser-extension/
+COPY browser-extension/src/ browser-extension/src/
+RUN cd browser-extension && npm install && npm run build
+
+# Assemble extension directory (built dist + static files)
+COPY browser-extension/manifest.json browser-extension/manifest.json
+COPY browser-extension/popup.html browser-extension/popup.html
+COPY browser-extension/popup.js browser-extension/popup.js
+
+# Pack extension as CRX3 for Chrome external install
+COPY docker/pack-extension.mjs /build/pack-extension.mjs
+RUN node pack-extension.mjs /build/browser-extension /build/extension.crx /build/extension-id.txt
+
+# ============================================
+# Stage 2: Runtime
+# ============================================
+FROM node:22-slim AS runtime
+
+# Install Google Chrome, Xvfb, x11vnc, and noVNC
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    gnupg \
+    ca-certificates \
+    xvfb \
+    x11vnc \
+    novnc \
+    websockify \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libxss1 \
+    libxtst6 \
+    libgbm1 \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libasound2 \
+    libgtk-3-0 \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    xdg-utils \
+  && wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+  && apt-get install -y --no-install-recommends ./google-chrome-stable_current_amd64.deb \
+  && rm google-chrome-stable_current_amd64.deb \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy mcp-server build artifacts and install production deps
+COPY --from=builder /build/mcp-server/dist/ mcp-server/dist/
+COPY --from=builder /build/mcp-server/package.json mcp-server/
+COPY --from=builder /build/mcp-server/package-lock.json* mcp-server/
+RUN cd mcp-server && npm install --omit=dev
+
+# Copy browser-extension (for reference / popup access)
+COPY --from=builder /build/browser-extension/dist/ browser-extension/dist/
+COPY browser-extension/manifest.json browser-extension/manifest.json
+COPY browser-extension/popup.html browser-extension/popup.html
+COPY browser-extension/popup.js browser-extension/popup.js
+
+# Install extension via Chrome external extensions mechanism
+COPY --from=builder /build/extension.crx /opt/extensions/extension.crx
+COPY --from=builder /build/extension-id.txt /tmp/extension-id.txt
+RUN EXT_ID=$(cat /tmp/extension-id.txt) && \
+    mkdir -p /opt/google/chrome/extensions && \
+    echo "{\"external_crx\": \"/opt/extensions/extension.crx\", \"external_version\": \"1.0.0\"}" \
+      > "/opt/google/chrome/extensions/${EXT_ID}.json" && \
+    chmod 644 "/opt/google/chrome/extensions/${EXT_ID}.json" && \
+    echo "Chrome external extension registered: ${EXT_ID}"
+
+# Chrome managed policies: allow the extension, suppress prompts
+RUN EXT_ID=$(cat /tmp/extension-id.txt) && \
+    mkdir -p /etc/opt/chrome/policies/managed && \
+    echo "{ \
+      \"ExtensionInstallAllowlist\": [\"${EXT_ID}\"], \
+      \"ExtensionAllowedTypes\": [\"extension\"], \
+      \"BlockExternalExtensions\": false \
+    }" > /etc/opt/chrome/policies/managed/extension_policy.json && \
+    chmod 644 /etc/opt/chrome/policies/managed/extension_policy.json
+
+# Copy entrypoint
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Create non-root user
+RUN useradd -m -s /bin/bash mcp \
+  && mkdir -p /home/mcp/.config/google-chrome \
+  && chown -R mcp:mcp /app /home/mcp
+
+USER mcp
+
+EXPOSE 8080 6080
+
+ENTRYPOINT ["/entrypoint.sh"]

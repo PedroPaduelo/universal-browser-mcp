@@ -10,139 +10,140 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BridgeServer } from '../websocket/bridge-server.js';
+import { SessionManager, getSessionOrError } from '../session-manager.js';
 
-export function registerTabTools(mcpServer: McpServer, bridgeServer: BridgeServer) {
+export function registerTabTools(mcpServer: McpServer, bridgeServer: BridgeServer, sessionManager: SessionManager) {
   mcpServer.tool(
     'open_new_tab',
-    `Abre uma nova aba na sessão de automação.
+    `Open a new tab in the automation session.
 
-ÚTIL PARA:
-- Abrir múltiplas páginas simultaneamente
-- Comparar conteúdos
-- Navegar em links que abrem em nova aba
+USEFUL FOR:
+- Opening multiple pages simultaneously
+- Comparing content
+- Navigating links that open in new tabs
 
-EXEMPLO:
+EXAMPLE:
 { url: "https://github.com", switchTo: true }`,
     {
-      url: z.string().optional().describe('URL para abrir na nova aba (padrão: about:blank)'),
-      switchTo: z.boolean().optional().describe('Mudar para a nova aba após criar (padrão: true)')
+      url: z.string().optional().describe('URL to open in the new tab (default: about:blank)'),
+      switchTo: z.boolean().optional().describe('Switch to the new tab after creating (default: true)')
     },
-    async ({ url, switchTo }) => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ url, switchTo }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
         const result = await bridgeServer.sendCommandToBackground('open_new_tab_command', {
-          sessionId,
+          sessionId: session.browserSessionId,
           url,
           switchTo: switchTo !== false
         });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'get_tab_handles',
-    `Retorna todas as abas abertas na sessão de automação.
+    `Returns all open tabs in the automation session.
 
-RETORNA:
-- Lista de abas com tabId, url, title
-- Qual aba está ativa
-- Total de abas
+RETURNS:
+- List of tabs with tabId, url, title
+- Which tab is active
+- Total tab count
 
-ÚTIL PARA:
-- Ver quantas abas estão abertas
-- Obter IDs das abas para switch_to_tab
-- Verificar URLs de cada aba`,
+USEFUL FOR:
+- See how many tabs are open
+- Get tab IDs for switch_to_tab
+- Check URLs of each tab`,
     {},
-    async () => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendCommandToBackground('get_tab_handles_command', { sessionId });
+        const result = await bridgeServer.sendCommandToBackground('get_tab_handles_command', { sessionId: session.browserSessionId });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'switch_to_tab',
-    `Muda para uma aba específica na sessão.
+    `Switch to a specific tab in the session.
 
-PARÂMETROS:
-- tabId: ID da aba (obtido via get_tab_handles)
+PARAMETERS:
+- tabId: Tab ID (obtained via get_tab_handles)
 
-EXEMPLO:
+EXAMPLE:
 { tabId: 12345 }`,
     {
-      tabId: z.number().describe('ID da aba para mudar (obtido via get_tab_handles)')
+      tabId: z.number().describe('Tab ID to switch to (obtained via get_tab_handles)')
     },
-    async ({ tabId }) => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ tabId }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendCommandToBackground('switch_to_tab_command', { sessionId, tabId });
+        const result = await bridgeServer.sendCommandToBackground('switch_to_tab_command', { sessionId: session.browserSessionId, tabId });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'close_tab',
-    `Fecha uma aba específica na sessão.
+    `Close a specific tab in the session.
 
-NOTA: Não é possível fechar a última aba. Use close_automation_session para isso.
+NOTE: Cannot close the last tab. Use close_automation_session for that.
 
-EXEMPLO:
+EXAMPLE:
 { tabId: 12345 }`,
     {
-      tabId: z.number().describe('ID da aba para fechar (obtido via get_tab_handles)')
+      tabId: z.number().describe('Tab ID to close (obtained via get_tab_handles)')
     },
-    async ({ tabId }) => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ tabId }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendCommandToBackground('close_tab_command', { sessionId, tabId });
+        const result = await bridgeServer.sendCommandToBackground('close_tab_command', { sessionId: session.browserSessionId, tabId });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'get_current_tab',
-    'Retorna informações da aba ativa atual.',
+    'Returns information about the currently active tab.',
     {},
-    async () => {
-      const sessionId = bridgeServer.getCurrentSession();
-      if (!sessionId) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendCommandToBackground('get_current_tab_command', { sessionId });
+        const result = await bridgeServer.sendCommandToBackground('get_current_tab_command', { sessionId: session.browserSessionId });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );

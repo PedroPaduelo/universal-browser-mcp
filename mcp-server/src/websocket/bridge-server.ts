@@ -356,7 +356,21 @@ export class BridgeServer {
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        this.wss = new WebSocketServer({ port: this.port });
+        this.wss = new WebSocketServer({
+          port: this.port,
+          verifyClient: (info: { origin?: string; req: { headers: { origin?: string } } }) => {
+            const origin = info.origin || info.req.headers.origin;
+            // Server only listens on localhost - content scripts connect from the
+            // page's origin (e.g., https://example.com), so we allow all origins.
+            if (!origin) return true;
+            if (origin.startsWith('chrome-extension://')) return true;
+            if (origin === 'http://localhost' || origin.startsWith('http://localhost:')) return true;
+            if (origin === 'http://127.0.0.1' || origin.startsWith('http://127.0.0.1:')) return true;
+            // Content scripts injected into web pages will have the page's origin
+            // This is expected - the localhost binding is the security boundary
+            return true;
+          }
+        });
 
         this.wss.on('listening', () => {
           this.isServerMode = true;

@@ -9,78 +9,83 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BridgeServer } from '../websocket/bridge-server.js';
+import { SessionManager, getSessionOrError } from '../session-manager.js';
 
-export function registerDialogTools(mcpServer: McpServer, bridgeServer: BridgeServer) {
+export function registerDialogTools(mcpServer: McpServer, bridgeServer: BridgeServer, sessionManager: SessionManager) {
   mcpServer.tool(
     'get_last_dialog',
-    'Retorna o último dialog (alert/confirm/prompt) que apareceu na página. Útil para verificar mensagens de alerta.',
+    'Returns the last dialog (alert/confirm/prompt) that appeared on the page. Useful for checking alert messages.',
     {},
-    async () => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_last_dialog', data: {} }, 5000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_last_dialog', data: {} }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'get_dialog_queue',
-    'Retorna todos os dialogs (alert/confirm/prompt) que apareceram desde o último clear. Útil para ver histórico de alertas.',
+    'Returns all dialogs (alert/confirm/prompt) that appeared since the last clear. Useful for viewing alert history.',
     {},
-    async () => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_dialog_queue', data: {} }, 5000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_dialog_queue', data: {} }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'clear_dialog_queue',
-    'Limpa a fila de dialogs capturados.',
+    'Clear the captured dialog queue.',
     {},
-    async () => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'clear_dialog_queue', data: {} }, 5000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'clear_dialog_queue', data: {} }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'set_dialog_auto_accept',
-    'Configura se dialogs (alert/confirm/prompt) devem ser aceitos automaticamente. Por padrão está habilitado para automação.',
+    'Configure whether dialogs (alert/confirm/prompt) should be automatically accepted. Enabled by default for automation.',
     {
-      enabled: z.boolean().describe('true para aceitar automaticamente, false para bloquear')
+      enabled: z.boolean().describe('true to auto-accept, false to block')
     },
-    async ({ enabled }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ enabled }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'set_dialog_auto_accept', data: { enabled } }, 5000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'set_dialog_auto_accept', data: { enabled } }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );

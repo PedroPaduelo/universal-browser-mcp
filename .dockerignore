@@ -1,0 +1,17 @@
+.git/
+**/node_modules/
+**/dist/
+**/recordings/
+**/*.map
+**/*.test.ts
+**/*.test.js
+**/coverage/
+**/*.tsbuildinfo
+.env
+.env.*
+*.log
+docs/
+.vscode/
+.idea/
+tmp/
+temp/

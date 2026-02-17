@@ -9,8 +9,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BridgeServer } from '../websocket/bridge-server.js';
+import { SessionManager, getSessionOrError } from '../session-manager.js';
 
-export function registerPageInfoTools(mcpServer: McpServer, bridgeServer: BridgeServer) {
+export function registerPageInfoTools(mcpServer: McpServer, bridgeServer: BridgeServer, sessionManager: SessionManager) {
   mcpServer.tool(
     'get_page_info',
     `Get page structure: forms, buttons, inputs, clickable elements.
@@ -26,13 +27,14 @@ INPUT (all optional):
       includeClickable: z.boolean().optional(),
       maxElements: z.number().optional()
     },
-    async (params) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No session active.' }] };
+    async (params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_page_info', data: params }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_page_info', data: params }, 10000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -42,15 +44,16 @@ INPUT (all optional):
 
   mcpServer.tool(
     'get_page_title',
-    'Retorna o título da página atual.',
+    'Returns the current page title.',
     {},
-    async () => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_page_title', data: {} }, 5000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_page_title', data: {} }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -60,17 +63,18 @@ INPUT (all optional):
 
   mcpServer.tool(
     'get_page_text',
-    'Retorna todo o texto visível da página ou de um elemento específico.',
+    'Returns all visible text from the page or a specific element.',
     {
-      selector: z.string().optional().describe('Seletor CSS do elemento (opcional, padrão: body)')
+      selector: z.string().optional().describe('CSS selector of the element (optional, default: body)')
     },
-    async ({ selector }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ selector }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_page_text', data: { selector } }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_page_text', data: { selector } }, 10000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -99,13 +103,14 @@ RETURNS:
 WORKFLOW:
 navigate_to -> get_page_snapshot -> (if need details) get_page_info`,
     {},
-    async () => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_page_snapshot', data: {} }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_page_snapshot', data: {} }, 10000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };

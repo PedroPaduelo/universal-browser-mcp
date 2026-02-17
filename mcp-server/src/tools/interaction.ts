@@ -21,8 +21,9 @@ import {
   SelectOptionSchema,
   TypeTextSchema
 } from '../schemas/index.js';
+import { SessionManager, getSessionOrError } from '../session-manager.js';
 
-export function registerInteractionTools(mcpServer: McpServer, bridgeServer: BridgeServer) {
+export function registerInteractionTools(mcpServer: McpServer, bridgeServer: BridgeServer, sessionManager: SessionManager) {
   mcpServer.tool(
     'fill_field',
     `Fill a form field.
@@ -36,15 +37,16 @@ INPUT:
       label: z.string().optional().describe('Label text'),
       value: z.string().describe('Value to fill')
     },
-    async (params) => {
+    async (params, extra) => {
       FillFieldSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'fill_field', data: params }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'fill_field', data: params }, 10000);
         return { content: [{ type: 'text', text: `Filled: ${JSON.stringify(result)}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -54,26 +56,27 @@ INPUT:
 
   mcpServer.tool(
     'fill_form',
-    'Preenche múltiplos campos de um formulário de uma vez.',
+    'Fill multiple form fields at once.',
     {
       fields: z.array(z.object({
         selector: z.string().optional(),
         label: z.string().optional(),
         value: z.string()
-      })).describe('Array de campos com selector/label e value')
+      })).describe('Array of fields with selector/label and value')
     },
-    async ({ fields }) => {
+    async ({ fields }, extra) => {
       FillFormSchema.parse({ fields });
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'fill_form', data: { fields } }, 15000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'fill_form', data: { fields } }, 15000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro ao preencher formulário: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error filling form: ${(error as Error).message}` }] };
       }
     }
   );
@@ -91,15 +94,16 @@ INPUT (provide ONE):
       text: z.string().optional().describe('Visible text'),
       clickParent: z.boolean().optional()
     },
-    async (params) => {
+    async (params, extra) => {
       ClickElementSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'click_element', data: params }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'click_element', data: params }, 10000);
         return { content: [{ type: 'text', text: `Clicked: ${JSON.stringify(result)}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
@@ -109,49 +113,51 @@ INPUT (provide ONE):
 
   mcpServer.tool(
     'double_click',
-    `Executa clique duplo em um elemento. Útil para:
-- Selecionar palavras em campos de texto
-- Abrir itens em listas
-- Editar células de tabelas`,
+    `Double-click an element. Useful for:
+- Selecting words in text fields
+- Opening items in lists
+- Editing table cells`,
     {
-      selector: z.string().optional().describe('Seletor CSS do elemento'),
-      text: z.string().optional().describe('Texto visível do elemento')
+      selector: z.string().optional().describe('CSS selector of the element'),
+      text: z.string().optional().describe('Visible text of the element')
     },
-    async (params) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'double_click', data: params }, 10000);
-        return { content: [{ type: 'text', text: `Clique duplo: ${JSON.stringify(result)}` }] };
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'double_click', data: params }, 10000);
+        return { content: [{ type: 'text', text: `Double-clicked: ${JSON.stringify(result)}` }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'select_option',
-    'Seleciona uma opção em um dropdown/select.',
+    'Select an option in a dropdown/select element.',
     {
-      selector: z.string().optional().describe('Seletor CSS do select'),
-      label: z.string().optional().describe('Label do campo select'),
-      value: z.string().optional().describe('Valor (value) da opção'),
-      text: z.string().optional().describe('Texto visível da opção')
+      selector: z.string().optional().describe('CSS selector of the select element'),
+      label: z.string().optional().describe('Label of the select field'),
+      value: z.string().optional().describe('Value attribute of the option'),
+      text: z.string().optional().describe('Visible text of the option')
     },
-    async (params) => {
+    async (params, extra) => {
       SelectOptionSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'select_option', data: params }, 10000);
-        return { content: [{ type: 'text', text: `Opção selecionada: ${JSON.stringify(result)}` }] };
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'select_option', data: params }, 10000);
+        return { content: [{ type: 'text', text: `Option selected: ${JSON.stringify(result)}` }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro ao selecionar: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error selecting option: ${(error as Error).message}` }] };
       }
     }
   );
@@ -186,15 +192,16 @@ focus_element (optional) -> type_text -> wait for autocomplete -> click suggesti
       text: z.string().describe('Text to type'),
       delay: z.number().optional().describe('Delay between keystrokes in ms (default: 50)')
     },
-    async (params) => {
+    async (params, extra) => {
       TypeTextSchema.parse(params);
 
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Error: No active automation session.' }] };
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'type_text', data: params }, 30000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'type_text', data: params }, 30000);
         return { content: [{ type: 'text', text: `Text typed: ${JSON.stringify(result)}` }] };
       } catch (error) {
         return { content: [{ type: 'text', text: `Error typing: ${(error as Error).message}` }] };
@@ -204,161 +211,167 @@ focus_element (optional) -> type_text -> wait for autocomplete -> click suggesti
 
   mcpServer.tool(
     'hover_element',
-    'Move o mouse sobre um elemento (hover).',
+    'Move the mouse over an element (hover).',
     {
-      selector: z.string().describe('Seletor CSS do elemento')
+      selector: z.string().describe('CSS selector of the element')
     },
-    async ({ selector }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ selector }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'hover_element', data: { selector } }, 10000);
-        return { content: [{ type: 'text', text: `Hover realizado: ${JSON.stringify(result)}` }] };
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'hover_element', data: { selector } }, 10000);
+        return { content: [{ type: 'text', text: `Hover performed: ${JSON.stringify(result)}` }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro no hover: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error on hover: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'scroll_to',
-    'Rola a página até um elemento ou posição.',
+    'Scroll the page to an element or position.',
     {
-      selector: z.string().optional().describe('Seletor CSS do elemento'),
-      x: z.number().optional().describe('Posição X em pixels'),
-      y: z.number().optional().describe('Posição Y em pixels')
+      selector: z.string().optional().describe('CSS selector of the element'),
+      x: z.number().optional().describe('X position in pixels'),
+      y: z.number().optional().describe('Y position in pixels')
     },
-    async ({ selector, x, y }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ selector, x, y }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       const data = selector ? { selector } : { position: { x, y } };
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'scroll_to', data }, 5000);
-        return { content: [{ type: 'text', text: `Scroll realizado: ${JSON.stringify(result)}` }] };
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'scroll_to', data }, 5000);
+        return { content: [{ type: 'text', text: `Scroll performed: ${JSON.stringify(result)}` }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro no scroll: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error scrolling: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'press_key',
-    `Pressiona uma tecla do teclado. Útil para:
-- Confirmar ações (Enter)
-- Cancelar/fechar modais (Escape)
-- Navegar entre campos (Tab)
-- Navegar em listas (ArrowUp, ArrowDown)
-- Deletar texto (Backspace, Delete)
+    `Press a keyboard key. Useful for:
+- Confirming actions (Enter)
+- Canceling/closing modals (Escape)
+- Navigating between fields (Tab)
+- Navigating in lists (ArrowUp, ArrowDown)
+- Deleting text (Backspace, Delete)
 
-TECLAS SUPORTADAS:
+SUPPORTED KEYS:
 Enter, Escape, Tab, Backspace, Delete, Space,
 ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
 Home, End, PageUp, PageDown
 
-EXEMPLOS:
-- Confirmar busca: { key: "Enter" }
-- Fechar modal: { key: "Escape" }
-- Próximo campo: { key: "Tab" }
+EXAMPLES:
+- Confirm search: { key: "Enter" }
+- Close modal: { key: "Escape" }
+- Next field: { key: "Tab" }
 - Ctrl+A: { key: "a", modifiers: { ctrl: true } }`,
     {
-      key: z.string().describe('Tecla a pressionar (Enter, Escape, Tab, ArrowDown, etc.)'),
-      selector: z.string().optional().describe('Seletor do elemento (opcional, usa elemento focado se não informado)'),
+      key: z.string().describe('Key to press (Enter, Escape, Tab, ArrowDown, etc.)'),
+      selector: z.string().optional().describe('Element selector (optional, uses focused element if not provided)'),
       modifiers: z.object({
         ctrl: z.boolean().optional(),
         shift: z.boolean().optional(),
         alt: z.boolean().optional(),
         meta: z.boolean().optional()
-      }).optional().describe('Modificadores (ctrl, shift, alt, meta)')
+      }).optional().describe('Modifiers (ctrl, shift, alt, meta)')
     },
-    async ({ key, selector, modifiers }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ key, selector, modifiers }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'press_key', data: { key, selector, modifiers } }, 5000);
-        return { content: [{ type: 'text', text: `Tecla pressionada: ${JSON.stringify(result)}` }] };
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'press_key', data: { key, selector, modifiers } }, 5000);
+        return { content: [{ type: 'text', text: `Key pressed: ${JSON.stringify(result)}` }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro ao pressionar tecla: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error pressing key: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'focus_element',
-    `Foca em um elemento da página. Útil antes de usar press_key.`,
+    'Focus on a page element. Useful before using press_key.',
     {
-      selector: z.string().describe('Seletor CSS do elemento')
+      selector: z.string().describe('CSS selector of the element')
     },
-    async ({ selector }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ selector }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'focus_element', data: { selector } }, 5000);
-        return { content: [{ type: 'text', text: `Elemento focado: ${JSON.stringify(result)}` }] };
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'focus_element', data: { selector } }, 5000);
+        return { content: [{ type: 'text', text: `Element focused: ${JSON.stringify(result)}` }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'get_active_element',
-    `Retorna informações sobre o elemento atualmente focado na página.`,
+    'Returns information about the currently focused element on the page.',
     {},
-    async () => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async (_params, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_active_element', data: {} }, 5000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_active_element', data: {} }, 5000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
 
   mcpServer.tool(
     'get_element_info',
-    `Retorna informações detalhadas de um elemento específico.
+    `Returns detailed information about a specific element.
 
-ÚTIL PARA:
-- Descobrir seletores alternativos para um elemento
-- Verificar se elemento está visível, habilitado, focado
-- Obter atributos data-*, aria-*, etc.
-- Entender a estrutura do elemento antes de interagir
+USEFUL FOR:
+- Discovering alternative selectors for an element
+- Checking if element is visible, enabled, focused
+- Getting data-*, aria-* attributes
+- Understanding element structure before interacting
 
-RETORNA:
+RETURNS:
 - tagName, id, className, name, type, value
-- Atributos data-* e ARIA
-- Estados (isVisible, isEnabled, isChecked, isFocused)
-- Posição e tamanho
-- Seletores alternativos
+- data-* and ARIA attributes
+- States (isVisible, isEnabled, isChecked, isFocused)
+- Position and size
+- Alternative selectors
 
-EXEMPLO:
-{ selector: "span[title='Maruann']" }`,
+EXAMPLE:
+{ selector: "span[title='Username']" }`,
     {
-      selector: z.string().describe('Seletor CSS do elemento')
+      selector: z.string().describe('CSS selector of the element')
     },
-    async ({ selector }) => {
-      if (!bridgeServer.isConnected()) {
-        return { content: [{ type: 'text', text: 'Erro: Nenhuma sessão de automação ativa.' }] };
+    async ({ selector }, extra) => {
+      const session = getSessionOrError(sessionManager, extra.sessionId);
+      if ('error' in session) {
+        return { content: [{ type: 'text', text: session.error }] };
       }
 
       try {
-        const result = await bridgeServer.sendAndWait({ type: 'get_element_info', data: { selector } }, 10000);
+        const result = await bridgeServer.sendAndWaitToSession(session.browserSessionId, { type: 'get_element_info', data: { selector } }, 10000);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: `Erro: ${(error as Error).message}` }] };
+        return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }] };
       }
     }
   );
